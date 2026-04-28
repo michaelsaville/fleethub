@@ -1,0 +1,27 @@
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+
+# Node / Go / Next.js artifacts (will exist once Phase 1 starts)
+node_modules
+.next
+out
+build
+dist
+target/
+*.log
+*.exe
+*.msi
+
+# OS / editor
+.DS_Store
+.vscode
+.idea
+*.swp
+
+# Code-signing keys (must NEVER be in git)
+*.p12
+*.pfx
+*.pem
+*.key
