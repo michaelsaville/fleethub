@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    container_name: fleethub-app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    ports:
+      # nginx on 100.91.194.83 reverse-proxies https://fleethub.pcc2k.com → :3011
+      - "3011:3000"
+    networks:
+      - dochub_default
+
+networks:
+  dochub_default:
+    external: true

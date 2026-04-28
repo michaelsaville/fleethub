@@ -1,0 +1,198 @@
+// FleetHub Prisma Schema
+// Shares the existing dochub Postgres database with TicketHub, DocHub, OpsHub.
+// All models prefixed Fl_ and live in the `fleethub` schema.
+// Schema is additive only after first push — never rename or drop columns.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["fleethub"]
+}
+
+// ─── STAFF GATE ────────────────────────────────────────────────────────────
+
+/// Per-app email allowlist for FleetHub access. Mirrors OpsHub's pattern;
+/// intentionally separate so junior tech can have OpsHub access without
+/// FleetHub access (or vice-versa).
+model Fl_StaffUser {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  role      String   @default("TECH") // ADMIN | TECH | VIEWER
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Per-staff saved views (column orderings, dashboard layouts, alert
+  // filters). JSON blob keyed by view-id; UI saves whenever a tech
+  // resizes a column or rearranges a widget. Per UI-PATTERNS.md, all
+  // list state must persist — retrofitting it later is expensive.
+  savedViewsJson String?
+
+  @@map("fl_staff_users")
+  @@schema("fleethub")
+}
+
+// ─── AUDIT LOG ─────────────────────────────────────────────────────────────
+
+/// Append-only privileged-action log. Hash-chained per HIPAA-READY.md.
+/// Drives the activity-log component on every detail page.
+///
+/// `prevHash` + `rowHash` form the chain: rowHash = SHA-256 of
+/// (prevHash || actor || action || target || createdAt || detailJson).
+/// Tampering with any historical row breaks the chain — verify on demand
+/// via /api/audit/verify endpoint (Phase 1+).
+///
+/// Database role MUST be REVOKEd from DELETE/UPDATE on this table at
+/// deploy time (Phase 1 deploy task).
+model Fl_AuditLog {
+  id            String   @id @default(cuid())
+  actorEmail    String?
+  /// Cross-app key (matches TH_Client.name; OpsHub Op_AuditLog uses same).
+  clientName    String?
+  /// Target host/device identifier (Fl_Device.id, hostname, or null for
+  /// non-host actions like "client.connected").
+  deviceId      String?
+  /// Verb in dotted form: "agent.command.run", "patch.deploy.queued",
+  /// "script.execute", "remote.session.opened", etc.
+  action        String
+  outcome       String  // "ok" | "error" | "pending"
+  detailJson    String?
+  prevHash      String?
+  rowHash       String?
+  createdAt     DateTime @default(now())
+
+  @@index([clientName, createdAt])
+  @@index([deviceId, createdAt])
+  @@index([action, createdAt])
+  @@map("fl_audit_log")
+  @@schema("fleethub")
+}
+
+// ─── DEVICES ───────────────────────────────────────────────────────────────
+
+/// One row per host an agent connects from. Phase 1 fills basics
+/// (hostname, OS, last seen); Phases 2-5 add inventory/patch/script
+/// state (likely as JSON blobs on this row, plus dedicated tables for
+/// time-series).
+model Fl_Device {
+  id            String    @id @default(cuid())
+  /// Cross-app key — matches TH_Client.name.
+  clientName    String
+  hostname      String
+  os            String?   // "windows" | "linux" | "darwin"
+  osVersion     String?
+  /// Free-form: "DC", "workstation", "server", "laptop". Set by tech.
+  role          String?
+  ipAddress     String?
+  /// FK to Op_Agent.id once an agent enrolls. Null until enrollment.
+  agentId       String?
+  isOnline      Boolean   @default(false)
+  lastSeenAt    DateTime?
+  /// Last hardware/software inventory snapshot — JSON blob, normalized
+  /// into separate tables in Phase 1 if/when query needs surface.
+  inventoryJson String?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([clientName, hostname])
+  @@index([clientName, isOnline])
+  @@index([os])
+  @@map("fl_devices")
+  @@schema("fleethub")
+}
+
+// ─── ALERTS ────────────────────────────────────────────────────────────────
+
+/// Active and historical alerts. Each row is one event in a host's
+/// timeline. Resolved alerts kept for 6+ years per HIPAA retention.
+model Fl_Alert {
+  id            String    @id @default(cuid())
+  clientName    String
+  deviceId      String?
+  /// "ok->fail" transition that fired this alert: "disk.full",
+  /// "service.down", "patch.failed", "agent.disconnected", etc.
+  kind          String
+  severity      String    // "info" | "warn" | "critical"
+  title         String
+  /// Optional machine-readable payload (e.g. service name + state).
+  detailJson    String?
+  state         String    @default("open") // "open" | "ack" | "resolved"
+  ackedBy       String?
+  ackedAt       DateTime?
+  resolvedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([clientName, state, createdAt])
+  @@index([deviceId, state])
+  @@index([severity, state])
+  @@map("fl_alerts")
+  @@schema("fleethub")
+}
+
+// ─── SCRIPTS ───────────────────────────────────────────────────────────────
+
+/// Script library — the "ComStore but curated" per UI-PATTERNS.md.
+/// Each script is hash-pinned: signedHash is what the agent verifies
+/// before execution. Editing a script creates a new revision; old
+/// revisions retained for audit.
+model Fl_Script {
+  id            String   @id @default(cuid())
+  /// Display name shown in the library.
+  name          String
+  /// "powershell" | "bash" | "batch".
+  shell         String
+  description   String?
+  category      String?  // "maintenance" | "diagnostics" | "remediation" | ...
+  tagsJson      String?  // ["disk", "windows", "remediation"]
+  body          String   @db.Text
+  /// SHA-256 of body, signed by an admin. Agent verifies before run.
+  /// Per HIPAA-READY signed-script-only enforcement.
+  signedHash    String
+  signedBy      String?
+  signedAt      DateTime?
+  /// Whether this is in the "curated" set (visible in default library)
+  /// or a private/draft script (only visible to creator). Curation gate
+  /// per UI-PATTERNS — quality > quantity.
+  isCurated     Boolean  @default(false)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([category, isCurated])
+  @@map("fl_scripts")
+  @@schema("fleethub")
+}
+
+// ─── SCRIPT EXECUTIONS ─────────────────────────────────────────────────────
+
+/// History of script runs. One row per (script, target host) pair.
+/// Drives the "recent activity" cards on device detail pages.
+model Fl_ScriptRun {
+  id            String    @id @default(cuid())
+  scriptId      String
+  deviceId      String
+  /// Tech who initiated; null for cron/scheduled runs.
+  initiatedBy   String?
+  /// "queued" | "running" | "ok" | "error" | "timeout" | "cancelled" | "dryrun"
+  state         String    @default("queued")
+  /// stdout from agent (truncated to 64KB; full output in object storage).
+  output        String?   @db.Text
+  exitCode      Int?
+  /// Was this a dry run? Defaults true per HIPAA-READY.md; tech opts in.
+  dryRun        Boolean   @default(true)
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([deviceId, createdAt])
+  @@index([scriptId, createdAt])
+  @@index([state])
+  @@map("fl_script_runs")
+  @@schema("fleethub")
+}
