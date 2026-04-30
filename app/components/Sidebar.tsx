@@ -22,7 +22,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/",         label: "Dashboard",  icon: "🏠" },
   { href: "/clients",  label: "Clients",    icon: "🏢" },
   { href: "/devices",  label: "Devices",    icon: "💻" },
-  { href: "/alerts",   label: "Alerts",     icon: "🔔", badge: 3 },
+  { href: "/alerts",   label: "Alerts",     icon: "🔔" },
   { href: "/patches",  label: "Patches",    icon: "🩹" },
   { href: "/scripts",  label: "Scripts",    icon: "⚡" },
   { href: "/software", label: "Software",   icon: "📦" },
