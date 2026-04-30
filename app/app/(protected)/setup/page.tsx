@@ -58,6 +58,14 @@ export default async function SetupPage() {
             description="Per-client severity thresholds, on-call rotation, mute windows."
             disabled
           />
+          <SetupCard
+            href="/audit"
+            label="Audit log"
+            status={isAdmin ? "live" : "ADMIN-only"}
+            description="Hash-chained record of every privileged action; filter by actor, action, outcome, or date. Verify chain integrity on demand."
+            disabled={!isAdmin}
+            disabledHint={!isAdmin ? "ADMIN-only" : undefined}
+          />
         </section>
       </div>
     </AppShell>
