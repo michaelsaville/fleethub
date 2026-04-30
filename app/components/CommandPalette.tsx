@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 
-type ResultCategory = "Commands" | "Entities" | "Recent"
+type ResultCategory = "Entities" | "Recent"
 
 interface PaletteResult {
   id: string
@@ -14,43 +14,33 @@ interface PaletteResult {
   icon?: string
 }
 
+interface SearchResponse {
+  entities: PaletteResult[]
+  recent: PaletteResult[]
+}
+
 /**
  * Cmd-K command palette per UI-PATTERNS.md:
- *   1. Commands  — verb-led ("reset password sarah", "patch now host01")
- *   2. Entities  — fuzzy-matched devices, clients, scripts, alerts
- *   3. Recent    — last 5 things you opened
+ *   1. Entities  — fuzzy-matched devices, clients, scripts, alerts
+ *   2. Recent    — your last few audit-log actions
  *
- * Phase 0 ships with mock data so the UX can be validated before any
- * backend wiring lands. Phase 1 swaps the in-memory MOCK_RESULTS for
- * a /api/palette/search?q=... endpoint that hits Postgres + the audit
- * log for "recent."
+ * Phase 0 ships Entities + Recent only — no Commands category until the
+ * agent lands and we have actual executable verbs ("patch now", "run
+ * script") to surface. Better empty than aspirational.
  *
  * Keyboard:
  *   ⌘K / Ctrl+K  open
  *   ↑ / ↓        navigate
- *   ENTER        select (executes command or navigates to entity)
+ *   ENTER        select
  *   ESC          close
  */
-const MOCK_RESULTS: PaletteResult[] = [
-  // Commands — verb-led, executable
-  { id: "c-1", category: "Commands", label: "Reset password — Sarah Smith",      hint: "acme · M365 user",     href: "/clients/acme/users?action=reset&u=sarah", icon: "🔑" },
-  { id: "c-2", category: "Commands", label: "Patch now — acme-dc01",              hint: "Windows Server 2022", href: "/devices/acme-dc01?action=patch",          icon: "🩹" },
-  { id: "c-3", category: "Commands", label: "Run script CleanTempFiles on Acme",  hint: "47 hosts targeted",   href: "/scripts/clean-temp/run?fleet=acme",       icon: "⚡" },
-  { id: "c-4", category: "Commands", label: "Open RDP — msaville-laptop",         hint: "1-click remote",      href: "/devices/msaville-laptop?action=remote",   icon: "🖥" },
-  // Entities — fuzzy-matched
-  { id: "e-1", category: "Entities", label: "msaville-laptop",   hint: "device · acme · online", href: "/devices/msaville-laptop", icon: "💻" },
-  { id: "e-2", category: "Entities", label: "acme-dc01",         hint: "device · acme · online", href: "/devices/acme-dc01",       icon: "💻" },
-  { id: "e-3", category: "Entities", label: "Acme Corp",         hint: "client · 47 devices",    href: "/clients/acme",            icon: "🏢" },
-  { id: "e-4", category: "Entities", label: "CleanTempFiles.ps1", hint: "script · curated",      href: "/scripts/clean-temp",      icon: "⚡" },
-  // Recent — most recently opened
-  { id: "r-1", category: "Recent",   label: "Disk space alert — acme-dc01", hint: "10m ago",          href: "/alerts/r-1", icon: "🔔" },
-  { id: "r-2", category: "Recent",   label: "Patch deployment — May 2026",   hint: "1h ago",           href: "/patches/may-2026", icon: "🩹" },
-]
-
 export default function CommandPalette() {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState("")
+  const [debouncedQuery, setDebouncedQuery] = useState("")
   const [activeIndex, setActiveIndex] = useState(0)
+  const [results, setResults] = useState<SearchResponse>({ entities: [], recent: [] })
+  const [loading, setLoading] = useState(false)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const router = useRouter()
 
@@ -59,7 +49,7 @@ export default function CommandPalette() {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault()
-        setOpen(o => !o)
+        setOpen((o) => !o)
       } else if (e.key === "Escape" && open) {
         setOpen(false)
       }
@@ -68,7 +58,6 @@ export default function CommandPalette() {
     return () => window.removeEventListener("keydown", onKey)
   }, [open])
 
-  // Focus input when opening
   useEffect(() => {
     if (open) {
       setQuery("")
@@ -77,31 +66,60 @@ export default function CommandPalette() {
     }
   }, [open])
 
-  const filtered = useMemo(() => {
-    if (!query.trim()) return MOCK_RESULTS
-    const q = query.toLowerCase()
-    return MOCK_RESULTS.filter(
-      r => r.label.toLowerCase().includes(q) || (r.hint?.toLowerCase().includes(q) ?? false),
-    )
+  // Debounce: 120ms feels snappy without spamming the DB on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query), 120)
+    return () => clearTimeout(t)
   }, [query])
 
-  const grouped = useMemo(() => {
-    const groups: Record<ResultCategory, PaletteResult[]> = { Commands: [], Entities: [], Recent: [] }
-    for (const r of filtered) groups[r.category].push(r)
-    return (["Commands", "Entities", "Recent"] as const)
-      .filter(cat => groups[cat].length > 0)
-      .map(cat => ({ category: cat, items: groups[cat] }))
-  }, [filtered])
+  useEffect(() => {
+    if (!open) return
+    const ac = new AbortController()
+    setLoading(true)
+    fetch(`/api/palette/search?q=${encodeURIComponent(debouncedQuery)}`, {
+      signal: ac.signal,
+      cache: "no-store",
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((data: SearchResponse) => {
+        setResults(data)
+        setActiveIndex(0)
+      })
+      .catch((e) => {
+        if ((e as { name?: string }).name !== "AbortError") {
+          setResults({ entities: [], recent: [] })
+        }
+      })
+      .finally(() => setLoading(false))
+    return () => ac.abort()
+  }, [open, debouncedQuery])
 
-  const flat = grouped.flatMap(g => g.items)
+  const grouped = useMemo(() => {
+    const order: ResultCategory[] = ["Entities", "Recent"]
+    return order
+      .map((cat) => ({
+        category: cat,
+        items: cat === "Entities" ? results.entities : results.recent,
+      }))
+      .filter((g) => g.items.length > 0)
+  }, [results])
+
+  const flat = grouped.flatMap((g) => g.items)
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "ArrowDown") { e.preventDefault(); setActiveIndex(i => Math.min(i + 1, flat.length - 1)) }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIndex(i => Math.max(i - 1, 0)) }
-    else if (e.key === "Enter") {
+    if (e.key === "ArrowDown") {
+      e.preventDefault()
+      setActiveIndex((i) => Math.min(i + 1, flat.length - 1))
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault()
+      setActiveIndex((i) => Math.max(i - 1, 0))
+    } else if (e.key === "Enter") {
       e.preventDefault()
       const pick = flat[activeIndex]
-      if (pick) { router.push(pick.href); setOpen(false) }
+      if (pick) {
+        router.push(pick.href)
+        setOpen(false)
+      }
     }
   }
 
@@ -122,7 +140,7 @@ export default function CommandPalette() {
       }}
     >
       <div
-        onClick={e => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         style={{
           width: "min(640px, 92vw)",
           background: "var(--color-background-secondary)",
@@ -136,9 +154,12 @@ export default function CommandPalette() {
           <input
             ref={inputRef}
             value={query}
-            onChange={e => { setQuery(e.target.value); setActiveIndex(0) }}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setActiveIndex(0)
+            }}
             onKeyDown={onKeyDown}
-            placeholder="Search devices, clients, scripts — or type a command…"
+            placeholder="Search devices, scripts, alerts…"
             style={{
               width: "100%",
               background: "transparent",
@@ -153,10 +174,14 @@ export default function CommandPalette() {
         <div style={{ maxHeight: "400px", overflowY: "auto", padding: "8px 0" }}>
           {grouped.length === 0 ? (
             <div style={{ padding: "24px", textAlign: "center", color: "var(--color-text-muted)", fontSize: "12px" }}>
-              No results.
+              {loading
+                ? "Searching…"
+                : query.trim()
+                ? "No matches."
+                : "Type to search · or press ESC to close"}
             </div>
           ) : (
-            grouped.map(group => (
+            grouped.map((group) => (
               <div key={group.category}>
                 <div
                   style={{
@@ -170,14 +195,17 @@ export default function CommandPalette() {
                 >
                   {group.category}
                 </div>
-                {group.items.map(item => {
+                {group.items.map((item) => {
                   const idx = flat.indexOf(item)
                   const active = idx === activeIndex
                   return (
                     <button
                       key={item.id}
                       onMouseEnter={() => setActiveIndex(idx)}
-                      onClick={() => { router.push(item.href); setOpen(false) }}
+                      onClick={() => {
+                        router.push(item.href)
+                        setOpen(false)
+                      }}
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -203,9 +231,7 @@ export default function CommandPalette() {
                           </div>
                         )}
                       </div>
-                      {active && (
-                        <span style={{ fontSize: "10px", color: "var(--color-text-muted)" }}>↵</span>
-                      )}
+                      {active && <span style={{ fontSize: "10px", color: "var(--color-text-muted)" }}>↵</span>}
                     </button>
                   )
                 })}
@@ -223,7 +249,7 @@ export default function CommandPalette() {
             color: "var(--color-text-muted)",
           }}
         >
-          <div>Phase 0 stub · MOCK_RESULTS — Phase 1 hooks the real search backend</div>
+          <div>{loading ? "Searching…" : `${flat.length} result${flat.length === 1 ? "" : "s"}`}</div>
           <div>esc to close</div>
         </div>
       </div>
