@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic"
 
 interface PaletteResult {
   id: string
-  category: "Entities" | "Recent"
+  category: "Pages" | "Entities" | "Recent"
   label: string
   hint?: string
   href: string
@@ -27,17 +27,62 @@ interface PaletteResult {
 
 const PER_CATEGORY = 5
 
+interface PageEntry {
+  label: string
+  hint: string
+  href: string
+  icon: string
+  keywords: string[]
+  adminOnly?: boolean
+}
+
+const PAGES: PageEntry[] = [
+  { label: "Dashboard", hint: "Fleet KPIs and recent activity", href: "/",          icon: "🏠", keywords: ["home", "overview", "kpi", "summary"] },
+  { label: "Clients",   hint: "Per-client fleet rollup",        href: "/clients",   icon: "🏢", keywords: ["fleet", "tenants", "managed"] },
+  { label: "Devices",   hint: "Inventory and per-host detail",  href: "/devices",   icon: "💻", keywords: ["hosts", "endpoints", "inventory", "machines"] },
+  { label: "Alerts",    hint: "Open and acknowledged alerts",   href: "/alerts",    icon: "🔔", keywords: ["incidents", "warnings", "critical"] },
+  { label: "Patches",   hint: "Fleet-wide patch posture",       href: "/patches",   icon: "🩹", keywords: ["updates", "kbs", "windows update"] },
+  { label: "Scripts",   hint: "Library + signed bodies",        href: "/scripts",   icon: "⚡", keywords: ["automation", "powershell", "bash", "remediation"] },
+  { label: "Software",  hint: "Installed apps + prevalence",    href: "/software",  icon: "📦", keywords: ["apps", "installs", "winget", "choco", "brew"] },
+  { label: "Reports",   hint: "Compliance and lifecycle",       href: "/reports",   icon: "📊", keywords: ["compliance", "eol", "lifecycle", "pdf"] },
+  { label: "Setup",     hint: "Tenant configuration",           href: "/setup",     icon: "⚙️", keywords: ["settings", "config", "admin", "staff", "integrations"] },
+  { label: "Audit log", hint: "Hash-chained event history",     href: "/audit",     icon: "📜", keywords: ["audit", "log", "events", "who", "compliance", "hipaa"], adminOnly: true },
+  { label: "Staff",     hint: "Manage who can sign in",         href: "/setup/staff", icon: "👥", keywords: ["users", "roles", "admin", "tech", "viewer"], adminOnly: true },
+]
+
+function searchPages(q: string, isAdmin: boolean): PaletteResult[] {
+  if (q.length === 0) return []
+  const needle = q.toLowerCase()
+  const candidates = PAGES.filter((p) => !p.adminOnly || isAdmin)
+  const matches = candidates.filter((p) =>
+    p.label.toLowerCase().includes(needle) ||
+    p.href.toLowerCase().includes(needle) ||
+    p.keywords.some((k) => k.includes(needle)),
+  )
+  return matches.slice(0, PER_CATEGORY).map((p) => ({
+    id: `page:${p.href}`,
+    category: "Pages" as const,
+    label: p.label,
+    hint: p.hint,
+    href: p.href,
+    icon: p.icon,
+  }))
+}
+
 export async function GET(request: Request) {
   const session = await getServerSession(authOptions)
   const email = session?.user?.email?.toLowerCase()
   if (!email) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 })
   }
+  const role = (session?.user as { role?: string } | undefined)?.role
+  const isAdmin = role === "ADMIN"
 
   const q = (new URL(request.url).searchParams.get("q") ?? "").trim()
   const wantEntities = q.length > 0
 
-  const [devices, scripts, alerts, recent] = await Promise.all([
+  const [pages, devices, scripts, alerts, recent] = await Promise.all([
+    Promise.resolve(searchPages(q, isAdmin)),
     wantEntities ? searchDevices(q) : Promise.resolve([] as PaletteResult[]),
     wantEntities ? searchScripts(q) : Promise.resolve([] as PaletteResult[]),
     wantEntities ? searchAlerts(q) : Promise.resolve([] as PaletteResult[]),
@@ -60,7 +105,7 @@ export async function GET(request: Request) {
     }
   }
 
-  return NextResponse.json({ entities, recent })
+  return NextResponse.json({ pages, entities, recent })
 }
 
 async function searchDevices(q: string): Promise<PaletteResult[]> {

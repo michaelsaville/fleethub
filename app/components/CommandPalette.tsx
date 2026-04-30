@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 
-type ResultCategory = "Entities" | "Recent"
+type ResultCategory = "Pages" | "Entities" | "Recent"
 
 interface PaletteResult {
   id: string
@@ -15,18 +15,20 @@ interface PaletteResult {
 }
 
 interface SearchResponse {
+  pages: PaletteResult[]
   entities: PaletteResult[]
   recent: PaletteResult[]
 }
 
 /**
  * Cmd-K command palette per UI-PATTERNS.md:
- *   1. Entities  — fuzzy-matched devices, clients, scripts, alerts
- *   2. Recent    — your last few audit-log actions
+ *   1. Pages     — direct nav to top-level surfaces (typed match)
+ *   2. Entities  — fuzzy-matched devices, scripts, alerts
+ *   3. Recent    — your last few audit-log actions
  *
- * Phase 0 ships Entities + Recent only — no Commands category until the
- * agent lands and we have actual executable verbs ("patch now", "run
- * script") to surface. Better empty than aspirational.
+ * Phase 0 ships Pages + Entities + Recent only — no Commands category
+ * until the agent lands and we have actual executable verbs ("patch
+ * now", "run script") to surface. Better empty than aspirational.
  *
  * Keyboard:
  *   ⌘K / Ctrl+K  open
@@ -39,7 +41,7 @@ export default function CommandPalette() {
   const [query, setQuery] = useState("")
   const [debouncedQuery, setDebouncedQuery] = useState("")
   const [activeIndex, setActiveIndex] = useState(0)
-  const [results, setResults] = useState<SearchResponse>({ entities: [], recent: [] })
+  const [results, setResults] = useState<SearchResponse>({ pages: [], entities: [], recent: [] })
   const [loading, setLoading] = useState(false)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const router = useRouter()
@@ -87,7 +89,7 @@ export default function CommandPalette() {
       })
       .catch((e) => {
         if ((e as { name?: string }).name !== "AbortError") {
-          setResults({ entities: [], recent: [] })
+          setResults({ pages: [], entities: [], recent: [] })
         }
       })
       .finally(() => setLoading(false))
@@ -95,11 +97,14 @@ export default function CommandPalette() {
   }, [open, debouncedQuery])
 
   const grouped = useMemo(() => {
-    const order: ResultCategory[] = ["Entities", "Recent"]
+    const order: ResultCategory[] = ["Pages", "Entities", "Recent"]
     return order
       .map((cat) => ({
         category: cat,
-        items: cat === "Entities" ? results.entities : results.recent,
+        items:
+          cat === "Pages"    ? results.pages :
+          cat === "Entities" ? results.entities :
+                               results.recent,
       }))
       .filter((g) => g.items.length > 0)
   }, [results])
@@ -159,7 +164,7 @@ export default function CommandPalette() {
               setActiveIndex(0)
             }}
             onKeyDown={onKeyDown}
-            placeholder="Search devices, scripts, alerts…"
+            placeholder="Jump to a page or search devices, scripts, alerts…"
             style={{
               width: "100%",
               background: "transparent",
