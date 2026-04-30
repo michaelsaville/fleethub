@@ -283,3 +283,45 @@ export async function getDeviceActivity(deviceId: string, limit = 20): Promise<A
     }
   })
 }
+
+export interface DeviceScriptRun {
+  id: string
+  scriptId: string
+  scriptName: string | null
+  state: "queued" | "running" | "ok" | "error" | "timeout" | "cancelled" | "dryrun"
+  exitCode: number | null
+  dryRun: boolean
+  initiatedBy: string | null
+  startedAt: Date | null
+  finishedAt: Date | null
+  createdAt: Date
+}
+
+export async function getDeviceScriptRuns(deviceId: string, limit = 20): Promise<DeviceScriptRun[]> {
+  if (await mockMode()) return []
+  const rows = await prisma.fl_ScriptRun.findMany({
+    where: { deviceId },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+  })
+  const scriptIds = [...new Set(rows.map((r) => r.scriptId))]
+  const scripts = scriptIds.length
+    ? await prisma.fl_Script.findMany({
+        where: { id: { in: scriptIds } },
+        select: { id: true, name: true },
+      })
+    : []
+  const nameById = new Map(scripts.map((s) => [s.id, s.name]))
+  return rows.map((r) => ({
+    id: r.id,
+    scriptId: r.scriptId,
+    scriptName: nameById.get(r.scriptId) ?? null,
+    state: (r.state as DeviceScriptRun["state"]) ?? "queued",
+    exitCode: r.exitCode,
+    dryRun: r.dryRun,
+    initiatedBy: r.initiatedBy,
+    startedAt: r.startedAt,
+    finishedAt: r.finishedAt,
+    createdAt: r.createdAt,
+  }))
+}

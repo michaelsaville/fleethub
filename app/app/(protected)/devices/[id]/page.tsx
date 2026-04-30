@@ -3,8 +3,8 @@ import { notFound } from "next/navigation"
 import AppShell from "@/components/AppShell"
 import ActivityFeed from "@/components/ActivityFeed"
 import SeedBanner from "@/components/SeedBanner"
-import { getDevice, getDeviceActivity, getDeviceAlerts, relativeLastSeen } from "@/lib/devices"
-import type { DeviceAlert, DeviceRow } from "@/lib/devices"
+import { getDevice, getDeviceActivity, getDeviceAlerts, getDeviceScriptRuns, listDevices, relativeLastSeen } from "@/lib/devices"
+import type { DeviceAlert, DeviceRow, DeviceScriptRun } from "@/lib/devices"
 
 export const dynamic = "force-dynamic"
 
@@ -34,10 +34,19 @@ export default async function DeviceDetailPage({
   const device = await getDevice(id)
   if (!device) notFound()
 
-  const [alerts, activity] = await Promise.all([
+  const [alerts, activity, scriptRuns, fleet] = await Promise.all([
     getDeviceAlerts(id),
     getDeviceActivity(id, 30),
+    getDeviceScriptRuns(id, 20),
+    listDevices(),
   ])
+  const fleetSize = fleet.rows.length
+  const fleetAppCounts = new Map<string, number>()
+  for (const d of fleet.rows) {
+    for (const name of d.inventory?.software.sample ?? []) {
+      fleetAppCounts.set(name, (fleetAppCounts.get(name) ?? 0) + 1)
+    }
+  }
 
   return (
     <AppShell openAlertsCount={alerts.filter((a) => a.state === "open").length}>
@@ -51,9 +60,9 @@ export default async function DeviceDetailPage({
         {tab === "system"   && <SystemTab device={device} />}
         {tab === "alerts"   && <AlertsTab alerts={alerts} />}
         {tab === "activity" && <ActivityFeed items={activity} title="Device activity" />}
-        {tab === "patches"  && <PhaseStub label="Patches"  phase="Phase 4" hint="Pending KBs, deploy history, ring assignment, deferral status." />}
-        {tab === "scripts"  && <PhaseStub label="Scripts"  phase="Phase 2" hint="Recent script runs scoped to this host, with output drill-in." />}
-        {tab === "software" && <PhaseStub label="Software" phase="Phase 3" hint="Installed apps with version/source, install/uninstall/update buttons." />}
+        {tab === "patches"  && <PatchesTab device={device} />}
+        {tab === "scripts"  && <ScriptsTab runs={scriptRuns} />}
+        {tab === "software" && <SoftwareTab device={device} fleetSize={fleetSize} fleetAppCounts={fleetAppCounts} />}
         {tab === "network"  && <PhaseStub label="Network"  phase="Phase 1.5" hint="Interface list, listening ports, recent connections." />}
       </div>
     </AppShell>
@@ -336,9 +345,232 @@ function SystemTab({ device }: { device: DeviceRow }) {
           ["Timezone",   inv.os.timezone],
         ]} />
       </Card>
-      <Card title={`Installed software · ${inv.software.totalInstalled}`}>
-        <SoftwareSample sample={inv.software.sample} total={inv.software.totalInstalled} />
+    </div>
+  )
+}
+
+function PatchesTab({ device }: { device: DeviceRow }) {
+  const inv = device.inventory
+  if (!inv) {
+    return (
+      <Card title="Patches · Phase 4">
+        <Empty>No inventory snapshot yet — agent has not reported.</Empty>
       </Card>
+    )
+  }
+  const lastChecked = new Date(inv.patches.lastChecked)
+  const ageMs = Date.now() - lastChecked.getTime()
+  const ageDays = Math.floor(ageMs / 86_400_000)
+  const stale = ageDays > 7
+  const fullyPatched = inv.patches.pending === 0 && inv.patches.failed === 0
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+      <Card title="Patch posture">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "12px", marginBottom: "12px" }}>
+          <PostureTile label="Pending" value={String(inv.patches.pending)} tone={inv.patches.pending > 0 ? "warn" : "ok"} />
+          <PostureTile label="Failed"  value={String(inv.patches.failed)}  tone={inv.patches.failed  > 0 ? "danger" : "ok"} />
+          <PostureTile label="Last check" value={ageDays === 0 ? "today" : `${ageDays}d ago`} tone={stale ? "warn" : "neutral"} />
+          <PostureTile label="Status" value={fullyPatched ? "Up to date" : "Updates available"} tone={fullyPatched ? "ok" : "warn"} />
+        </div>
+        <p style={{ fontSize: "11.5px", color: "var(--color-text-muted)", margin: 0, lineHeight: 1.55 }}>
+          Last checked {lastChecked.toISOString().slice(0, 16).replace("T", " ")} UTC.{" "}
+          See <Link href="/patches" style={{ color: "var(--color-text-secondary)", textDecoration: "underline" }}>fleet-wide posture</Link>{" "}
+          for cross-client rollouts and ring approvals.
+        </p>
+      </Card>
+      <Card title="Phase 4 capabilities">
+        <ul style={{ margin: 0, padding: "0 0 0 18px", color: "var(--color-text-secondary)", fontSize: "12.5px", lineHeight: 1.7 }}>
+          <li>Per-KB list with severity, vendor, and supersedes chain</li>
+          <li>Ring assignment (canary / wave 1 / wave 2) with halt-on-failure</li>
+          <li>Deferral windows and per-host blackout overrides</li>
+          <li>Force-install with reboot scheduling and pre-reboot warning</li>
+          <li>Rollback for failed installs that pinned a known-bad KB</li>
+        </ul>
+      </Card>
+    </div>
+  )
+}
+
+function SoftwareTab({
+  device,
+  fleetSize,
+  fleetAppCounts,
+}: {
+  device: DeviceRow
+  fleetSize: number
+  fleetAppCounts: Map<string, number>
+}) {
+  const inv = device.inventory
+  if (!inv) {
+    return (
+      <Card title="Software · Phase 3">
+        <Empty>No inventory snapshot yet — agent has not reported.</Empty>
+      </Card>
+    )
+  }
+  const enriched = inv.software.sample.map((name) => {
+    const count = fleetAppCounts.get(name) ?? 0
+    return { name, hostCount: count, pct: fleetSize === 0 ? 0 : Math.round((count / fleetSize) * 100) }
+  })
+  enriched.sort((a, b) => b.hostCount - a.hostCount || a.name.localeCompare(b.name))
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+      <Card title={`Installed software · ${inv.software.totalInstalled}`}>
+        {enriched.length === 0 ? (
+          <Empty>No software sample reported.</Empty>
+        ) : (
+          <>
+            <p style={{ fontSize: "11.5px", color: "var(--color-text-muted)", margin: 0, marginBottom: "12px", lineHeight: 1.55 }}>
+              Each app shows its prevalence across the fleet — useful
+              for spotting outliers (one host running an app no one
+              else has) and shared dependencies.
+            </p>
+            <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: "10px" }}>
+              {enriched.map((a) => (
+                <li key={a.name}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", marginBottom: "4px" }}>
+                    <span style={{ color: "var(--color-text-primary)", fontWeight: 500 }}>{a.name}</span>
+                    <span style={{ color: "var(--color-text-muted)", fontSize: "11px" }}>
+                      {a.hostCount}/{fleetSize} hosts · {a.pct}%
+                    </span>
+                  </div>
+                  <div style={{ height: "4px", background: "var(--color-background-tertiary)", borderRadius: "999px", overflow: "hidden" }}>
+                    <div style={{ width: `${a.pct}%`, height: "100%", background: "var(--color-accent)" }} />
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {inv.software.totalInstalled > inv.software.sample.length && (
+              <div style={{ marginTop: "12px", fontSize: "11px", color: "var(--color-text-muted)" }}>
+                + {inv.software.totalInstalled - inv.software.sample.length} more — full list ships in Phase 3
+              </div>
+            )}
+          </>
+        )}
+      </Card>
+      <Card title="Phase 3 capabilities">
+        <ul style={{ margin: 0, padding: "0 0 0 18px", color: "var(--color-text-secondary)", fontSize: "12.5px", lineHeight: 1.7 }}>
+          <li>Full installed-app list with version, install date, and source (winget / choco / brew / msi)</li>
+          <li>One-click install / uninstall / upgrade with canary → wave rollout</li>
+          <li>Per-app version pinning to keep known-good builds across the fleet</li>
+          <li>Detect drift from per-client software baselines</li>
+        </ul>
+      </Card>
+    </div>
+  )
+}
+
+function ScriptsTab({ runs }: { runs: DeviceScriptRun[] }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+      <Card title={`Recent script runs${runs.length ? ` · ${runs.length}` : ""}`}>
+        {runs.length === 0 ? (
+          <Empty>
+            No script runs yet on this host.{" "}
+            <Link href="/scripts" style={{ color: "var(--color-text-secondary)", textDecoration: "underline" }}>
+              Browse the script library
+            </Link>{" "}
+            — execution against live hosts ships in Phase 2.
+          </Empty>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12.5px" }}>
+            <thead>
+              <tr style={thHeadRow}>
+                <th style={thStyle}>Script</th>
+                <th style={thStyle}>State</th>
+                <th style={thStyle}>Exit</th>
+                <th style={thStyle}>Mode</th>
+                <th style={thStyle}>By</th>
+                <th style={thStyle}>When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map((r) => (
+                <tr key={r.id} style={{ borderTop: "0.5px solid var(--color-border-tertiary)" }}>
+                  <td style={tdStyle}>
+                    <span style={{ color: "var(--color-text-primary)", fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "11.5px" }}>
+                      {r.scriptName ?? r.scriptId}
+                    </span>
+                  </td>
+                  <td style={tdStyle}>
+                    <ScriptStatePill state={r.state} />
+                  </td>
+                  <td style={tdStyle}>
+                    <span style={{ fontSize: "11px", color: r.exitCode === 0 ? "var(--color-success)" : r.exitCode == null ? "var(--color-text-muted)" : "var(--color-danger)" }}>
+                      {r.exitCode == null ? "—" : r.exitCode}
+                    </span>
+                  </td>
+                  <td style={tdStyle}>
+                    <span style={{ fontSize: "11px", color: r.dryRun ? "var(--color-text-muted)" : "var(--color-text-secondary)" }}>
+                      {r.dryRun ? "dry-run" : "live"}
+                    </span>
+                  </td>
+                  <td style={tdStyle}>
+                    <span style={{ fontSize: "11px", color: "var(--color-text-secondary)" }}>{r.initiatedBy ?? "scheduled"}</span>
+                  </td>
+                  <td style={tdStyle}>
+                    <span style={{ fontSize: "11px", color: "var(--color-text-muted)" }}>
+                      {relativeLastSeen(r.createdAt)}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+      <Card title="Phase 2 capabilities">
+        <ul style={{ margin: 0, padding: "0 0 0 18px", color: "var(--color-text-secondary)", fontSize: "12.5px", lineHeight: 1.7 }}>
+          <li>Run-once and scheduled jobs against this host</li>
+          <li>Dry-run by default; tech opts in to live execution</li>
+          <li>Signed-script enforcement — agent rejects unsigned bodies</li>
+          <li>Truncated stdout inline + full output in object storage</li>
+          <li>Halt + roll-back when a run errors above the configured threshold</li>
+        </ul>
+      </Card>
+    </div>
+  )
+}
+
+function ScriptStatePill({ state }: { state: DeviceScriptRun["state"] }) {
+  const tone =
+    state === "ok"        ? "var(--color-success)" :
+    state === "running"   ? "var(--color-accent)" :
+    state === "queued"    ? "var(--color-text-muted)" :
+    state === "dryrun"    ? "var(--color-text-muted)" :
+    state === "cancelled" ? "var(--color-text-muted)" :
+                            "var(--color-danger)"
+  return (
+    <span style={{
+      fontSize: "10.5px",
+      padding: "1px 7px",
+      borderRadius: "999px",
+      background: "var(--color-background-tertiary)",
+      color: tone,
+      border: `0.5px solid ${tone}`,
+      textTransform: "uppercase",
+      letterSpacing: "0.05em",
+      fontWeight: 600,
+    }}>
+      {state}
+    </span>
+  )
+}
+
+function PostureTile({ label, value, tone }: {
+  label: string
+  value: string
+  tone: "neutral" | "ok" | "warn" | "danger"
+}) {
+  const color =
+    tone === "danger" ? "var(--color-danger)" :
+    tone === "warn"   ? "var(--color-warning)" :
+    tone === "ok"     ? "var(--color-success)" :
+                        "var(--color-text-primary)"
+  return (
+    <div style={{ padding: "8px 10px", background: "var(--color-background-tertiary)", borderRadius: "8px", border: "0.5px solid var(--color-border-tertiary)" }}>
+      <div style={{ fontSize: "10px", fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
+      <div style={{ fontSize: "16px", fontWeight: 600, color, marginTop: "3px", lineHeight: 1.1 }}>{value}</div>
     </div>
   )
 }
@@ -483,37 +715,25 @@ function Gauge({ label, pct }: { label: string; pct: number }) {
   )
 }
 
-function SoftwareSample({ sample, total }: { sample: string[]; total: number }) {
-  return (
-    <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-        {sample.map((s) => (
-          <span
-            key={s}
-            style={{
-              padding: "2px 9px",
-              borderRadius: "999px",
-              fontSize: "11.5px",
-              background: "var(--color-background-tertiary)",
-              color: "var(--color-text-secondary)",
-              border: "0.5px solid var(--color-border-tertiary)",
-            }}
-          >
-            {s}
-          </span>
-        ))}
-      </div>
-      {total > sample.length && (
-        <div style={{ marginTop: "10px", fontSize: "11px", color: "var(--color-text-muted)" }}>
-          + {total - sample.length} more — full list ships in Phase 3 (Software namespace)
-        </div>
-      )}
-    </div>
-  )
-}
-
 function Empty({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ fontSize: "12.5px", color: "var(--color-text-muted)", lineHeight: 1.55 }}>{children}</div>
   )
+}
+
+const thHeadRow: React.CSSProperties = {
+  color: "var(--color-text-muted)",
+  fontSize: "10.5px",
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+}
+const thStyle: React.CSSProperties = {
+  textAlign: "left",
+  padding: "6px 8px",
+  fontWeight: 600,
+}
+const tdStyle: React.CSSProperties = {
+  padding: "6px 8px",
+  color: "var(--color-text-primary)",
+  verticalAlign: "top",
 }
