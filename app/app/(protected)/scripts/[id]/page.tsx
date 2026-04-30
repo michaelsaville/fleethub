@@ -2,7 +2,7 @@ import Link from "next/link"
 import { notFound } from "next/navigation"
 import AppShell from "@/components/AppShell"
 import { prisma } from "@/lib/prisma"
-import { requireSession } from "@/lib/authz"
+import { getSessionContext } from "@/lib/authz"
 import { updateScript, toggleScriptActive } from "../actions"
 import { ScriptForm } from "../ScriptForm"
 
@@ -14,8 +14,8 @@ export default async function ScriptDetailPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
-  const ctx = await requireSession()
-  const isAdmin = ctx.role === "ADMIN"
+  const ctx = await getSessionContext()
+  const isAdmin = ctx?.role === "ADMIN"
 
   const script = await prisma.fl_Script.findUnique({ where: { id } })
   if (!script) notFound()

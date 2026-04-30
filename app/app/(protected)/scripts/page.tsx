@@ -1,7 +1,7 @@
 import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import { prisma } from "@/lib/prisma"
-import { requireSession } from "@/lib/authz"
+import { getSessionContext } from "@/lib/authz"
 
 export const dynamic = "force-dynamic"
 
@@ -15,8 +15,8 @@ export default async function ScriptsPage({
   const sp = await searchParams
   const tab: Tab = sp.tab === "curated" || sp.tab === "drafts" ? sp.tab : "all"
 
-  const ctx = await requireSession()
-  const isAdmin = ctx.role === "ADMIN"
+  const ctx = await getSessionContext()
+  const isAdmin = ctx?.role === "ADMIN"
 
   const where =
     tab === "curated"
