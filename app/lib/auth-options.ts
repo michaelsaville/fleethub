@@ -1,6 +1,7 @@
 import type { NextAuthOptions } from "next-auth"
 import AzureADProvider from "next-auth/providers/azure-ad"
 import { prisma } from "@/lib/prisma"
+import { writeAudit } from "@/lib/audit"
 
 /**
  * Mirrors OpsHub auth — same PCC2K SSO Entra app, separate per-app
@@ -18,13 +19,30 @@ export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
   callbacks: {
     async signIn({ user }) {
-      if (!user.email) return false
+      const email = user.email?.toLowerCase()
+      if (!email) {
+        await safeAudit({ action: "auth.signin", outcome: "error", detail: { reason: "no-email" } })
+        return false
+      }
       try {
-        const allowed = await prisma.fl_StaffUser.findUnique({
-          where: { email: user.email.toLowerCase() },
+        const allowed = await prisma.fl_StaffUser.findUnique({ where: { email } })
+        const ok = !!(allowed && allowed.isActive)
+        if (!ok) {
+          await safeAudit({
+            actorEmail: email,
+            action: "auth.signin",
+            outcome: "error",
+            detail: { reason: allowed ? "inactive" : "not-allowlisted" },
+          })
+        }
+        return ok
+      } catch (e) {
+        await safeAudit({
+          actorEmail: email,
+          action: "auth.signin",
+          outcome: "error",
+          detail: { reason: "lookup-failed", message: String(e) },
         })
-        return !!(allowed && allowed.isActive)
-      } catch {
         return false
       }
     },
@@ -52,8 +70,34 @@ export const authOptions: NextAuthOptions = {
       return session
     },
   },
+  events: {
+    async signIn({ user }) {
+      await safeAudit({
+        actorEmail: user.email?.toLowerCase() ?? null,
+        action: "auth.signin",
+        outcome: "ok",
+      })
+    },
+    async signOut({ token }) {
+      const email = (token?.email as string | undefined)?.toLowerCase() ?? null
+      await safeAudit({
+        actorEmail: email,
+        action: "auth.signout",
+        outcome: "ok",
+      })
+    },
+  },
   pages: {
     signIn: "/login",
     error: "/login",
   },
+}
+
+async function safeAudit(args: Parameters<typeof writeAudit>[0]) {
+  try {
+    await writeAudit(args)
+  } catch (e) {
+    // Audit failure must never block auth; surface in logs only.
+    console.error("FleetHub audit write failed:", String(e))
+  }
 }

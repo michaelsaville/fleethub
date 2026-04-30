@@ -15,7 +15,13 @@ import CommandPalette from "@/components/CommandPalette"
  * any one of the big three RMMs — it's the convergence (sidebar +
  * top bar + main) plus the differentiator (Cmd-K is first-class).
  */
-export default function AppShell({ children }: { children: React.ReactNode }) {
+export default function AppShell({
+  children,
+  openAlertsCount,
+}: {
+  children: React.ReactNode
+  openAlertsCount?: number
+}) {
   const { data: session, status } = useSession()
   const router = useRouter()
 
@@ -36,7 +42,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <div style={{ display: "flex", minHeight: "100vh" }}>
       <Sidebar />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <TopBar email={session?.user?.email ?? null} />
+        <TopBar email={session?.user?.email ?? null} openAlertsCount={openAlertsCount} />
         <main style={{ flex: 1, padding: "24px 28px", overflowY: "auto" }}>{children}</main>
       </div>
       <CommandPalette />
@@ -44,7 +50,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   )
 }
 
-function TopBar({ email }: { email: string | null }) {
+function TopBar({ email, openAlertsCount }: { email: string | null; openAlertsCount?: number }) {
+  const showBadge = typeof openAlertsCount === "number" && openAlertsCount > 0
   return (
     <header
       style={{
@@ -59,9 +66,10 @@ function TopBar({ email }: { email: string | null }) {
     >
       <CmdKButton />
       <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-        <button
-          aria-label="Alerts"
-          title="Alerts (Phase 1 wires the live count)"
+        <a
+          href="/alerts?state=open"
+          aria-label={showBadge ? `${openAlertsCount} open alerts` : "Alerts"}
+          title={showBadge ? `${openAlertsCount} open alerts` : "No open alerts"}
           style={{
             position: "relative",
             background: "transparent",
@@ -70,29 +78,32 @@ function TopBar({ email }: { email: string | null }) {
             cursor: "pointer",
             fontSize: "16px",
             padding: "4px 8px",
+            textDecoration: "none",
           }}
         >
           🔔
-          <span
-            style={{
-              position: "absolute",
-              top: "2px",
-              right: "2px",
-              minWidth: "14px",
-              height: "14px",
-              padding: "0 4px",
-              borderRadius: "999px",
-              background: "var(--color-danger)",
-              color: "white",
-              fontSize: "9px",
-              fontWeight: 600,
-              display: "grid",
-              placeItems: "center",
-            }}
-          >
-            3
-          </span>
-        </button>
+          {showBadge && (
+            <span
+              style={{
+                position: "absolute",
+                top: "2px",
+                right: "2px",
+                minWidth: "14px",
+                height: "14px",
+                padding: "0 4px",
+                borderRadius: "999px",
+                background: "var(--color-danger)",
+                color: "white",
+                fontSize: "9px",
+                fontWeight: 600,
+                display: "grid",
+                placeItems: "center",
+              }}
+            >
+              {openAlertsCount}
+            </span>
+          )}
+        </a>
         <span style={{ fontSize: "12px", color: "var(--color-text-secondary)" }}>{email}</span>
         <button
           onClick={() => signOut({ callbackUrl: "/login" })}
