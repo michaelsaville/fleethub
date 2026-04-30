@@ -115,9 +115,11 @@ the shared WSS gateway.
 Before any code lands here, two design docs need to be locked:
 
 1. [docs/HIPAA-READY.md](docs/HIPAA-READY.md) — security/compliance constraints
-2. `docs/AGENT-PROTOCOL.md` — the WSS + JSON-RPC schema, signing,
-   replay protection, capability discovery (TBD — drafted alongside
-   OpsHub Phase 2's agent design, which lands first)
+2. [docs/AGENT-PROTOCOL.md](docs/AGENT-PROTOCOL.md) — WSS transport,
+   JSON-RPC envelope, mTLS + per-message HMAC, replay window, method
+   namespace ownership, signed-script enforcement, reconnect/replay
+   queue. Drafted 2026-04-30; `Op_Agent.proofKeyEnc` column add is the
+   one OpsHub-side dependency before code can land.
 
 ## Sister apps
 
