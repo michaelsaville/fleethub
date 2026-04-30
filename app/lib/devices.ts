@@ -1,8 +1,27 @@
 import "server-only"
+import { cache } from "react"
 import { prisma } from "@/lib/prisma"
-import { getMockAlertsForDevice, getMockDevices } from "@/lib/mock-fleet"
+import {
+  getMockAlertsForDevice,
+  getMockDevices,
+  synthesizeDeviceActivity,
+  synthesizeFleetActivity,
+  getMockAlertsAll,
+} from "@/lib/mock-fleet"
 import type { ActivityItem } from "@/components/ActivityFeed"
 import { relativeLastSeen } from "./devices-time"
+
+/**
+ * `mockMode()` is true when the live `fl_devices` table has zero
+ * active rows — that's the signal "no agents have enrolled, fall
+ * back to seed data everywhere." Cached for the duration of a
+ * single request via React's cache() so /devices, /alerts, dashboard,
+ * and Cmd-K all hit the DB once instead of N times.
+ */
+export const mockMode = cache(async (): Promise<boolean> => {
+  const c = await prisma.fl_Device.count({ where: { isActive: true } })
+  return c === 0
+})
 
 /**
  * Read-side abstraction over `Fl_Device`. Today's job: design the
@@ -91,13 +110,11 @@ export interface DeviceListResult {
 }
 
 export async function listDevices(filters: DeviceFilters = {}): Promise<DeviceListResult> {
-  const liveCount = await prisma.fl_Device.count({ where: { isActive: true } })
+  const isMock = await mockMode()
   let rows: DeviceRow[]
-  let isMock = false
 
-  if (liveCount === 0) {
+  if (isMock) {
     rows = getMockDevices()
-    isMock = true
   } else {
     const live = await prisma.fl_Device.findMany({ where: { isActive: true } })
     const alertCounts = await prisma.fl_Alert.groupBy({
@@ -146,8 +163,7 @@ export async function listDevices(filters: DeviceFilters = {}): Promise<DeviceLi
 }
 
 export async function getDevice(id: string): Promise<DeviceRow | null> {
-  const liveCount = await prisma.fl_Device.count({ where: { isActive: true } })
-  if (liveCount === 0) {
+  if (await mockMode()) {
     return getMockDevices().find((d) => d.id === id) ?? null
   }
   const live = await prisma.fl_Device.findUnique({ where: { id } })
@@ -216,8 +232,7 @@ function sortComparator(sort: NonNullable<DeviceFilters["sort"]>) {
 export { relativeLastSeen } from "./devices-time"
 
 export async function getDeviceAlerts(deviceId: string): Promise<DeviceAlert[]> {
-  const liveCount = await prisma.fl_Device.count({ where: { isActive: true } })
-  if (liveCount === 0) {
+  if (await mockMode()) {
     return getMockAlertsForDevice(deviceId)
   }
   const rows = await prisma.fl_Alert.findMany({
@@ -239,6 +254,9 @@ export async function getDeviceAlerts(deviceId: string): Promise<DeviceAlert[]> 
 }
 
 export async function getDeviceActivity(deviceId: string, limit = 20): Promise<ActivityItem[]> {
+  if (await mockMode()) {
+    return synthesizeDeviceActivity(deviceId, limit)
+  }
   const rows = await prisma.fl_AuditLog.findMany({
     where: { deviceId },
     orderBy: { createdAt: "desc" },

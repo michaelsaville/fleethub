@@ -14,7 +14,9 @@ import "server-only"
  * match. If it changes here, the agent collector changes too.
  */
 
+import type { ActivityItem } from "@/components/ActivityFeed"
 import type { DeviceAlert, DeviceRow, InventorySnapshot } from "@/lib/devices"
+import { relativeLastSeen } from "./devices-time"
 
 interface AlertSeed {
   kind: string
@@ -572,4 +574,162 @@ export function getMockDevices(): DeviceRow[] {
     alertCount: s.alertCount,
     isMock: true,
   }))
+}
+
+/**
+ * All seeded alerts across the fleet, sorted newest-first. Used by
+ * /alerts list view + dashboard counts when in mock mode.
+ */
+export function getMockAlertsAll(): DeviceAlert[] {
+  const all: DeviceAlert[] = []
+  for (const s of seeds) {
+    if (!s.alerts) continue
+    all.push(...getMockAlertsForDevice(s.id))
+  }
+  all.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+  return all
+}
+
+/**
+ * Synthesize an activity feed for a specific device — what would
+ * naturally be in `fl_audit_log` given the device's state. Used by
+ * /devices/[id] Activity tab in mock mode.
+ *
+ * Sources by descending recency:
+ *  - `agent.heartbeat` at lastSeenAt (most recent)
+ *  - `inventory.report` ~7 minutes earlier
+ *  - one row per open alert (`alert.fire`)
+ *  - `agent.session.opened` at the device's lastBootAt
+ */
+export function synthesizeDeviceActivity(deviceId: string, limit = 20): ActivityItem[] {
+  const seed = seeds.find((s) => s.id === deviceId)
+  if (!seed) return []
+  const items: ActivityItem[] = []
+  const now = Date.now()
+  const lastSeen = new Date(now - seed.lastSeenMinutesAgo * 60_000)
+  const lastBoot = new Date(seed.inventory.os.lastBootAt)
+
+  if (seed.isOnline) {
+    items.push({
+      id: `${seed.id}-act-hb`,
+      ts: relativeLastSeen(lastSeen),
+      actor: null,
+      action: "agent.heartbeat",
+      outcome: "ok",
+      detail: undefined,
+    })
+  } else {
+    items.push({
+      id: `${seed.id}-act-disc`,
+      ts: relativeLastSeen(lastSeen),
+      actor: null,
+      action: "agent.disconnected",
+      outcome: "error",
+      detail: `last heartbeat ${relativeLastSeen(lastSeen)}`,
+    })
+  }
+
+  items.push({
+    id: `${seed.id}-act-inv`,
+    ts: relativeLastSeen(new Date(lastSeen.getTime() - 7 * 60_000)),
+    actor: null,
+    action: "inventory.report",
+    outcome: "ok",
+    detail: `${seed.inventory.software.totalInstalled} apps · ${seed.inventory.patches.pending} patches pending`,
+  })
+
+  if (seed.alerts) {
+    for (const a of seed.alerts) {
+      items.push({
+        id: `${seed.id}-act-alert-${a.kind}`,
+        ts: relativeLastSeen(new Date(now - a.minutesAgo * 60_000)),
+        actor: null,
+        action: "alert.fire",
+        outcome: a.severity === "critical" ? "error" : "pending",
+        detail: a.title,
+      })
+    }
+  }
+
+  items.push({
+    id: `${seed.id}-act-sess`,
+    ts: relativeLastSeen(lastBoot),
+    actor: null,
+    action: "agent.session.opened",
+    outcome: "ok",
+    detail: `${seed.os} · v1.4.2`,
+  })
+
+  return items.slice(0, limit)
+}
+
+/**
+ * Synthesize a fleet-wide activity feed — what the dashboard activity
+ * card would show in mock mode. Aggregates alert.fire + agent.session
+ * + inventory.report rows across the seed fleet.
+ */
+export function synthesizeFleetActivity(limit = 8): ActivityItem[] {
+  const items: ActivityItem[] = []
+  const now = Date.now()
+  for (const s of seeds) {
+    const lastSeen = new Date(now - s.lastSeenMinutesAgo * 60_000)
+    if (s.alerts) {
+      for (const a of s.alerts) {
+        items.push({
+          id: `${s.id}-feed-alert-${a.kind}`,
+          ts: relativeLastSeen(new Date(now - a.minutesAgo * 60_000)),
+          actor: null,
+          action: "alert.fire",
+          outcome: a.severity === "critical" ? "error" : "pending",
+          detail: `${s.clientName} · ${s.hostname} · ${a.title}`,
+        })
+      }
+    }
+    if (!s.isOnline && s.lastSeenMinutesAgo < 24 * 60) {
+      items.push({
+        id: `${s.id}-feed-disc`,
+        ts: relativeLastSeen(lastSeen),
+        actor: null,
+        action: "agent.disconnected",
+        outcome: "error",
+        detail: `${s.clientName} · ${s.hostname}`,
+      })
+    } else if (s.isOnline && s.lastSeenMinutesAgo < 5) {
+      items.push({
+        id: `${s.id}-feed-inv`,
+        ts: relativeLastSeen(new Date(lastSeen.getTime() - 7 * 60_000)),
+        actor: null,
+        action: "inventory.report",
+        outcome: "ok",
+        detail: `${s.clientName} · ${s.hostname}`,
+      })
+    }
+  }
+  // Sort by parsed relative time is unreliable; sort by underlying ms
+  // distance instead — the synthesizer baked recency into every entry.
+  // Easier: sort lexicographically on ts since "Xs ago" < "Xm ago" < ...
+  // Cleaner: compute the absolute Date here too and sort on that. Do
+  // it the right way — re-derive timestamps.
+  const tsMs = new Map<string, number>()
+  for (const it of items) {
+    tsMs.set(it.id, parseRelativeMs(it.ts))
+  }
+  items.sort((a, b) => (tsMs.get(a.id) ?? 0) - (tsMs.get(b.id) ?? 0))
+  return items.slice(0, limit)
+}
+
+// "5s ago" → 5000, "2m ago" → 120_000, "3h ago" → 10_800_000, etc.
+// Used only by synthesizeFleetActivity to sort. Cheaper than carrying
+// the underlying Date around.
+function parseRelativeMs(rel: string): number {
+  const m = rel.match(/^(\d+)([smhd])\s+ago$/)
+  if (!m) return Number.MAX_SAFE_INTEGER
+  const n = Number(m[1])
+  switch (m[2]) {
+    case "s": return n * 1000
+    case "m": return n * 60_000
+    case "h": return n * 3_600_000
+    case "d": return n * 86_400_000
+    default:  return Number.MAX_SAFE_INTEGER
+  }
 }

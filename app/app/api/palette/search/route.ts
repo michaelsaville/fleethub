@@ -2,6 +2,8 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { prisma } from "@/lib/prisma"
+import { mockMode } from "@/lib/devices"
+import { getMockAlertsAll, getMockDevices } from "@/lib/mock-fleet"
 
 export const dynamic = "force-dynamic"
 
@@ -62,6 +64,25 @@ export async function GET(request: Request) {
 }
 
 async function searchDevices(q: string): Promise<PaletteResult[]> {
+  if (await mockMode()) {
+    const needle = q.toLowerCase()
+    const matched = getMockDevices().filter((d) =>
+      d.hostname.toLowerCase().includes(needle) ||
+      d.clientName.toLowerCase().includes(needle) ||
+      (d.ipAddress ?? "").toLowerCase().includes(needle) ||
+      (d.role ?? "").toLowerCase().includes(needle),
+    ).slice(0, PER_CATEGORY)
+    return matched.map((d) => ({
+      id: `device:${d.id}`,
+      category: "Entities" as const,
+      label: d.hostname,
+      hint: [d.clientName, d.role ?? d.os, d.isOnline ? "online" : "offline"]
+        .filter(Boolean)
+        .join(" · "),
+      href: `/devices/${d.id}`,
+      icon: "💻",
+    }))
+  }
   const rows = await prisma.fl_Device.findMany({
     where: {
       isActive: true,
@@ -121,6 +142,21 @@ async function searchScripts(q: string): Promise<PaletteResult[]> {
 }
 
 async function searchAlerts(q: string): Promise<PaletteResult[]> {
+  if (await mockMode()) {
+    const needle = q.toLowerCase()
+    const matched = getMockAlertsAll().filter((a) =>
+      a.title.toLowerCase().includes(needle) ||
+      a.kind.toLowerCase().includes(needle),
+    ).slice(0, PER_CATEGORY)
+    return matched.map((a) => ({
+      id: `alert:${a.id}`,
+      category: "Entities" as const,
+      label: a.title,
+      hint: [a.clientName, a.severity, a.state].filter(Boolean).join(" · "),
+      href: `/alerts/${a.id}`,
+      icon: a.severity === "critical" ? "🚨" : "🔔",
+    }))
+  }
   const rows = await prisma.fl_Alert.findMany({
     where: {
       OR: [

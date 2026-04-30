@@ -1,5 +1,7 @@
 import "server-only"
 import { prisma } from "@/lib/prisma"
+import { mockMode } from "@/lib/devices"
+import { getMockAlertsAll, getMockDevices, synthesizeFleetActivity } from "@/lib/mock-fleet"
 import type { ActivityItem } from "@/components/ActivityFeed"
 
 export interface DashboardStats {
@@ -16,6 +18,25 @@ export interface DashboardStats {
 }
 
 export async function getDashboardStats(): Promise<DashboardStats> {
+  if (await mockMode()) {
+    const devices = getMockDevices()
+    const alerts = getMockAlertsAll()
+    const openAlerts = alerts.filter((a) => a.state === "open")
+    const criticalAlerts = openAlerts.filter((a) => a.severity === "critical")
+    const hostsBehindPatch = devices.filter((d) => (d.inventory?.patches.pending ?? 0) > 0).length
+    const softwareUpdatesPending = devices.reduce((n, d) => n + (d.inventory?.patches.pending ?? 0), 0)
+    return {
+      onlineDevices: devices.filter((d) => d.isOnline).length,
+      totalDevices: devices.length,
+      openAlerts: openAlerts.length,
+      criticalAlerts: criticalAlerts.length,
+      scriptsQueued: 0,
+      clientsWithDevices: new Set(devices.map((d) => d.clientName)).size,
+      hostsBehindPatch,
+      softwareUpdatesPending,
+    }
+  }
+
   const [
     onlineDevices,
     totalDevices,
@@ -61,6 +82,9 @@ function relativeTime(date: Date): string {
 }
 
 export async function getRecentActivity(limit = 8): Promise<ActivityItem[]> {
+  if (await mockMode()) {
+    return synthesizeFleetActivity(limit)
+  }
   const rows = await prisma.fl_AuditLog.findMany({
     orderBy: { createdAt: "desc" },
     take: limit,
