@@ -56,6 +56,44 @@ const inventorySnapshot = z.object({
     ramPct: z.number(),
     diskPct: z.number(),
   }),
+  network: z
+    .object({
+      interfaces: z
+        .array(
+          z.object({
+            name: z.string(),
+            mac: z.string().optional(),
+            ipv4: z.array(z.string()).optional(),
+            ipv6: z.array(z.string()).optional(),
+            up: z.boolean(),
+            speedMbps: z.number().optional(),
+          }),
+        )
+        .default([]),
+      listeningPorts: z
+        .array(
+          z.object({
+            protocol: z.string(),
+            address: z.string(),
+            process: z.string().optional(),
+          }),
+        )
+        .default([]),
+      recentConnections: z
+        .array(
+          z.object({
+            protocol: z.string(),
+            local: z.string(),
+            remote: z.string(),
+            state: z.string(),
+          }),
+        )
+        .default([]),
+    })
+    // Network is Phase 1.5 — older agents (and the synthetic harness)
+    // don't include it. Default to an empty Network so the ingest
+    // boundary stays backwards-compatible.
+    .default({ interfaces: [], listeningPorts: [], recentConnections: [] }),
 })
 
 const deviceFacts = z.object({

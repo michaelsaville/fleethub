@@ -59,6 +59,27 @@ export interface InventorySnapshot {
   patches: { lastChecked: string; pending: number; failed: number }
   software: { totalInstalled: number; sample: string[] }
   health: { cpu7d: number; ramPct: number; diskPct: number }
+  network: {
+    interfaces: Array<{
+      name: string
+      mac?: string
+      ipv4?: string[]
+      ipv6?: string[]
+      up: boolean
+      speedMbps?: number
+    }>
+    listeningPorts: Array<{
+      protocol: string
+      address: string
+      process?: string
+    }>
+    recentConnections: Array<{
+      protocol: string
+      local: string
+      remote: string
+      state: string
+    }>
+  }
 }
 
 export interface DeviceAlert {
@@ -190,7 +211,18 @@ export async function getDevice(id: string): Promise<DeviceRow | null> {
 function parseInventory(json: string | null): InventorySnapshot | null {
   if (!json) return null
   try {
-    return JSON.parse(json) as InventorySnapshot
+    const raw = JSON.parse(json) as Partial<InventorySnapshot>
+    // Network is a Phase 1.5 addition — older rows (and synthetic
+    // pre-Phase-1.5 fixtures) won't have it. Default rather than
+    // forcing render code to null-check every access.
+    return {
+      ...raw,
+      network: raw.network ?? {
+        interfaces: [],
+        listeningPorts: [],
+        recentConnections: [],
+      },
+    } as InventorySnapshot
   } catch {
     return null
   }

@@ -78,6 +78,7 @@ const seeds: Seed[] = [
       patches: { lastChecked: "2026-04-30T03:14:00Z", pending: 2, failed: 0 },
       software: { totalInstalled: 87, sample: ["Microsoft 365 Apps", "Chrome 134", "Adobe Reader DC", "Epic Hyperdrive 9.4"] },
       health: { cpu7d: 18, ramPct: 42, diskPct: 44 },
+      network: { interfaces: [], listeningPorts: [], recentConnections: [] },
     },
   },
   {
@@ -124,6 +125,7 @@ const seeds: Seed[] = [
       patches: { lastChecked: "2026-04-30T03:14:00Z", pending: 4, failed: 0 },
       software: { totalInstalled: 91, sample: ["Microsoft 365 Apps", "Chrome 134", "Adobe Reader DC", "Epic Hyperdrive 9.4"] },
       health: { cpu7d: 22, ramPct: 67, diskPct: 92 },
+      network: { interfaces: [], listeningPorts: [], recentConnections: [] },
     },
   },
   {
@@ -161,6 +163,7 @@ const seeds: Seed[] = [
       patches: { lastChecked: "2026-04-30T02:00:00Z", pending: 0, failed: 0 },
       software: { totalInstalled: 42, sample: ["Active Directory DS", "DNS Server", "DHCP Server"] },
       health: { cpu7d: 9, ramPct: 31, diskPct: 31 },
+      network: { interfaces: [], listeningPorts: [], recentConnections: [] },
     },
   },
   {
@@ -214,6 +217,7 @@ const seeds: Seed[] = [
       patches: { lastChecked: "2026-04-25T02:00:00Z", pending: 7, failed: 1 },
       software: { totalInstalled: 38, sample: ["File Server role", "Veeam Agent", "Defender for Servers"] },
       health: { cpu7d: 12, ramPct: 48, diskPct: 71 },
+      network: { interfaces: [], listeningPorts: [], recentConnections: [] },
     },
   },
   {
@@ -251,6 +255,7 @@ const seeds: Seed[] = [
       patches: { lastChecked: "2026-04-30T03:14:00Z", pending: 1, failed: 0 },
       software: { totalInstalled: 64, sample: ["Microsoft 365 Apps", "Chrome 134", "Dentrix G7"] },
       health: { cpu7d: 14, ramPct: 38, diskPct: 40 },
+      network: { interfaces: [], listeningPorts: [], recentConnections: [] },
     },
   },
   {
@@ -297,6 +302,7 @@ const seeds: Seed[] = [
       patches: { lastChecked: "2026-04-30T03:14:00Z", pending: 3, failed: 0 },
       software: { totalInstalled: 71, sample: ["Microsoft 365 Apps", "Chrome 134", "Dentrix G7", "Sirona SiDexis"] },
       health: { cpu7d: 31, ramPct: 84, diskPct: 70 },
+      network: { interfaces: [], listeningPorts: [], recentConnections: [] },
     },
   },
   {
@@ -334,6 +340,7 @@ const seeds: Seed[] = [
       patches: { lastChecked: "2026-04-30T02:00:00Z", pending: 0, failed: 0 },
       software: { totalInstalled: 36, sample: ["Active Directory DS", "DNS Server", "Dentrix Server"] },
       health: { cpu7d: 11, ramPct: 28, diskPct: 33 },
+      network: { interfaces: [], listeningPorts: [], recentConnections: [] },
     },
   },
   {
@@ -371,6 +378,7 @@ const seeds: Seed[] = [
       patches: { lastChecked: "2026-04-30T04:00:00Z", pending: 0, failed: 0 },
       software: { totalInstalled: 412, sample: ["cups", "samba", "openssh-server", "ufw"] },
       health: { cpu7d: 4, ramPct: 22, diskPct: 14 },
+      network: { interfaces: [], listeningPorts: [], recentConnections: [] },
     },
   },
   {
@@ -408,6 +416,7 @@ const seeds: Seed[] = [
       patches: { lastChecked: "2026-04-30T05:00:00Z", pending: 1, failed: 0 },
       software: { totalInstalled: 152, sample: ["AutoCAD 2026", "Revit 2026", "Adobe Creative Cloud", "Chrome 134"] },
       health: { cpu7d: 27, ramPct: 56, diskPct: 52 },
+      network: { interfaces: [], listeningPorts: [], recentConnections: [] },
     },
   },
   {
@@ -454,6 +463,7 @@ const seeds: Seed[] = [
       patches: { lastChecked: "2026-04-29T03:14:00Z", pending: 2, failed: 0 },
       software: { totalInstalled: 102, sample: ["AutoCAD 2026", "Revit 2026", "Microsoft 365 Apps"] },
       health: { cpu7d: 41, ramPct: 71, diskPct: 58 },
+      network: { interfaces: [], listeningPorts: [], recentConnections: [] },
     },
   },
   {
@@ -491,6 +501,7 @@ const seeds: Seed[] = [
       patches: { lastChecked: "2026-04-30T04:00:00Z", pending: 1, failed: 0 },
       software: { totalInstalled: 502, sample: ["samba", "nfs-kernel-server", "zfs-utils-linux", "ufw"] },
       health: { cpu7d: 8, ramPct: 31, diskPct: 49 },
+      network: { interfaces: [], listeningPorts: [], recentConnections: [] },
     },
   },
   {
@@ -537,6 +548,7 @@ const seeds: Seed[] = [
       patches: { lastChecked: "2026-04-29T05:00:00Z", pending: 2, failed: 0 },
       software: { totalInstalled: 144, sample: ["AutoCAD 2026", "SketchUp Pro 2025", "Adobe Creative Cloud"] },
       health: { cpu7d: 15, ramPct: 38, diskPct: 60 },
+      network: { interfaces: [], listeningPorts: [], recentConnections: [] },
     },
   },
 ]

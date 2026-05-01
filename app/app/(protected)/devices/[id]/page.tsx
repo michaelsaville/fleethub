@@ -14,7 +14,7 @@ const TABS = [
   { id: "patches",  label: "Patches",  phase: "Phase 4" },
   { id: "scripts",  label: "Scripts",  phase: "Phase 2" },
   { id: "software", label: "Software", phase: "Phase 3" },
-  { id: "network",  label: "Network",  phase: "Phase 1.5" },
+  { id: "network",  label: "Network",  phase: null },
   { id: "activity", label: "Activity", phase: null },
   { id: "alerts",   label: "Alerts",   phase: null },
 ] as const
@@ -63,7 +63,7 @@ export default async function DeviceDetailPage({
         {tab === "patches"  && <PatchesTab device={device} />}
         {tab === "scripts"  && <ScriptsTab runs={scriptRuns} />}
         {tab === "software" && <SoftwareTab device={device} fleetSize={fleetSize} fleetAppCounts={fleetAppCounts} />}
-        {tab === "network"  && <PhaseStub label="Network"  phase="Phase 1.5" hint="Interface list, listening ports, recent connections." />}
+        {tab === "network"  && <NetworkTab device={device} />}
       </div>
     </AppShell>
   )
@@ -455,6 +455,116 @@ function SoftwareTab({
           <li>Per-app version pinning to keep known-good builds across the fleet</li>
           <li>Detect drift from per-client software baselines</li>
         </ul>
+      </Card>
+    </div>
+  )
+}
+
+function NetworkTab({ device }: { device: DeviceRow }) {
+  const inv = device.inventory
+  if (!inv) {
+    return (
+      <Card title="Network">
+        <Empty>No inventory snapshot yet — agent has not reported.</Empty>
+      </Card>
+    )
+  }
+  const { interfaces, listeningPorts, recentConnections } = inv.network
+  const upCount = interfaces.filter((i) => i.up).length
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+      <Card title={`Interfaces · ${upCount}/${interfaces.length} up`}>
+        {interfaces.length === 0 ? (
+          <Empty>No interfaces reported.</Empty>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12.5px" }}>
+            <thead>
+              <tr style={{ textAlign: "left", color: "var(--color-text-muted)", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                <th style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>Name</th>
+                <th style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>State</th>
+                <th style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>Speed</th>
+                <th style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>MAC</th>
+                <th style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>Addresses</th>
+              </tr>
+            </thead>
+            <tbody>
+              {interfaces.map((iface) => (
+                <tr key={iface.name}>
+                  <td style={{ padding: "8px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontFamily: "ui-monospace, SFMono-Regular, monospace", fontWeight: 500 }}>{iface.name}</td>
+                  <td style={{ padding: "8px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+                    <span style={{ color: iface.up ? "var(--color-success)" : "var(--color-text-muted)" }}>
+                      {iface.up ? "● up" : "○ down"}
+                    </span>
+                  </td>
+                  <td style={{ padding: "8px", borderBottom: "0.5px solid var(--color-border-tertiary)", color: "var(--color-text-muted)" }}>
+                    {iface.speedMbps ? `${iface.speedMbps} Mbps` : "—"}
+                  </td>
+                  <td style={{ padding: "8px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "11.5px", color: "var(--color-text-muted)" }}>
+                    {iface.mac || "—"}
+                  </td>
+                  <td style={{ padding: "8px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "11.5px" }}>
+                    {(iface.ipv4 ?? []).map((ip) => <div key={ip}>{ip}</div>)}
+                    {(iface.ipv6 ?? []).map((ip) => <div key={ip} style={{ color: "var(--color-text-muted)" }}>{ip}</div>)}
+                    {(iface.ipv4 ?? []).length === 0 && (iface.ipv6 ?? []).length === 0 && <span style={{ color: "var(--color-text-muted)" }}>—</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <Card title={`Listening ports · ${listeningPorts.length}`}>
+        {listeningPorts.length === 0 ? (
+          <Empty>No listening sockets reported. (Linux: ss not in PATH? Windows: PowerShell Get-NetTCPConnection access?)</Empty>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12.5px" }}>
+            <thead>
+              <tr style={{ textAlign: "left", color: "var(--color-text-muted)", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                <th style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>Proto</th>
+                <th style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>Address</th>
+                <th style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>Process</th>
+              </tr>
+            </thead>
+            <tbody>
+              {listeningPorts.map((p, i) => (
+                <tr key={`${p.address}-${i}`}>
+                  <td style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontFamily: "ui-monospace, SFMono-Regular, monospace", color: p.protocol === "tcp" ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>{p.protocol.toUpperCase()}</td>
+                  <td style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>{p.address}</td>
+                  <td style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)", color: "var(--color-text-muted)" }}>{p.process || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <Card title={`Recent connections · ${recentConnections.length}${recentConnections.length === 50 ? " (capped)" : ""}`}>
+        {recentConnections.length === 0 ? (
+          <Empty>No active outbound connections.</Empty>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12.5px" }}>
+            <thead>
+              <tr style={{ textAlign: "left", color: "var(--color-text-muted)", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                <th style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>Proto</th>
+                <th style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>Local</th>
+                <th style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>Remote</th>
+                <th style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>State</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentConnections.map((c, i) => (
+                <tr key={`${c.local}-${c.remote}-${i}`}>
+                  <td style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>{c.protocol.toUpperCase()}</td>
+                  <td style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>{c.local}</td>
+                  <td style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>{c.remote}</td>
+                  <td style={{ padding: "6px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)", color: "var(--color-text-muted)" }}>{c.state}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </Card>
     </div>
   )
