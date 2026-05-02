@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 
-type ResultCategory = "Pages" | "Entities" | "Recent"
+type ResultCategory = "Commands" | "Pages" | "Entities" | "Recent"
 
 interface PaletteResult {
   id: string
@@ -15,6 +15,7 @@ interface PaletteResult {
 }
 
 interface SearchResponse {
+  commands: PaletteResult[]
   pages: PaletteResult[]
   entities: PaletteResult[]
   recent: PaletteResult[]
@@ -41,7 +42,7 @@ export default function CommandPalette() {
   const [query, setQuery] = useState("")
   const [debouncedQuery, setDebouncedQuery] = useState("")
   const [activeIndex, setActiveIndex] = useState(0)
-  const [results, setResults] = useState<SearchResponse>({ pages: [], entities: [], recent: [] })
+  const [results, setResults] = useState<SearchResponse>({ commands: [], pages: [], entities: [], recent: [] })
   const [loading, setLoading] = useState(false)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const router = useRouter()
@@ -89,7 +90,7 @@ export default function CommandPalette() {
       })
       .catch((e) => {
         if ((e as { name?: string }).name !== "AbortError") {
-          setResults({ pages: [], entities: [], recent: [] })
+          setResults({ commands: [], pages: [], entities: [], recent: [] })
         }
       })
       .finally(() => setLoading(false))
@@ -97,11 +98,14 @@ export default function CommandPalette() {
   }, [open, debouncedQuery])
 
   const grouped = useMemo(() => {
-    const order: ResultCategory[] = ["Pages", "Entities", "Recent"]
+    // Commands first — when the operator types a verb, the destination
+    // they want is one Enter away. Then Pages, Entities, Recent.
+    const order: ResultCategory[] = ["Commands", "Pages", "Entities", "Recent"]
     return order
       .map((cat) => ({
         category: cat,
         items:
+          cat === "Commands" ? results.commands :
           cat === "Pages"    ? results.pages :
           cat === "Entities" ? results.entities :
                                results.recent,
@@ -164,7 +168,7 @@ export default function CommandPalette() {
               setActiveIndex(0)
             }}
             onKeyDown={onKeyDown}
-            placeholder="Jump to a page or search devices, scripts, alerts…"
+            placeholder="deploy chrome to acme · maintenance dc01 for 4h · run script cleantemp · or search…"
             style={{
               width: "100%",
               background: "transparent",

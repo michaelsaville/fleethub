@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth-options"
 import { prisma } from "@/lib/prisma"
 import { mockMode } from "@/lib/devices"
 import { getMockAlertsAll, getMockDevices } from "@/lib/mock-fleet"
+import { parsePaletteCommand, type PaletteCommand } from "@/lib/palette-commands"
 
 export const dynamic = "force-dynamic"
 
@@ -11,14 +12,18 @@ export const dynamic = "force-dynamic"
  * Cmd-K palette search. Any signed-in staff can search; access control on
  * what they can DO with a result lives on the destination route.
  *
- * Phase 0 returns Entities (devices/scripts/alerts) + Recent (own audit
- * activity). Commands category is intentionally absent until the agent
- * ships — we'd rather show no commands than show fake ones that fail.
+ * Phase 2/3 added the Commands category — typed verbs like
+ * `deploy chrome to acme`, `maintenance dc01 for 4h`, `run script
+ * cleantemp on dc01`, `catch up chrome` resolve to fully-qualified
+ * deep-links. See `lib/palette-commands.ts` for the parser.
+ *
+ * Real agent dispatch is mock-driven until Phase 2/3 step 4 lands —
+ * Commands navigate to forms, not to side-effect endpoints.
  */
 
 interface PaletteResult {
   id: string
-  category: "Pages" | "Entities" | "Recent"
+  category: "Commands" | "Pages" | "Entities" | "Recent"
   label: string
   hint?: string
   href: string
@@ -81,16 +86,18 @@ export async function GET(request: Request) {
   const q = (new URL(request.url).searchParams.get("q") ?? "").trim()
   const wantEntities = q.length > 0
 
-  const [pages, devices, scripts, alerts, recent] = await Promise.all([
+  const [commandsRaw, pages, devices, scripts, alerts, recent] = await Promise.all([
+    wantEntities ? parsePaletteCommand(q) : Promise.resolve([] as PaletteCommand[]),
     Promise.resolve(searchPages(q, isAdmin)),
     wantEntities ? searchDevices(q) : Promise.resolve([] as PaletteResult[]),
     wantEntities ? searchScripts(q) : Promise.resolve([] as PaletteResult[]),
     wantEntities ? searchAlerts(q) : Promise.resolve([] as PaletteResult[]),
     recentForActor(email),
   ])
+  const commands: PaletteResult[] = commandsRaw
 
-  // Interleave categories so a tech searching "acme" sees a device, a
-  // script, and a related alert before all five devices.
+  // Interleave entity categories so a tech searching "acme" sees a
+  // device, a script, and a related alert before all five devices.
   const entities: PaletteResult[] = []
   const buckets = [devices, scripts, alerts]
   let added = true
@@ -105,7 +112,7 @@ export async function GET(request: Request) {
     }
   }
 
-  return NextResponse.json({ pages, entities, recent })
+  return NextResponse.json({ commands, pages, entities, recent })
 }
 
 async function searchDevices(q: string): Promise<PaletteResult[]> {
