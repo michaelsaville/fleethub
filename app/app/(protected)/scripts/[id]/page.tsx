@@ -24,8 +24,24 @@ export default async function ScriptDetailPage({
     <AppShell>
       <div style={{ display: "flex", flexDirection: "column", gap: "20px", maxWidth: "800px" }}>
         <header>
-          <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginBottom: "4px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px", color: "var(--color-text-muted)", marginBottom: "4px" }}>
             <Link href="/scripts" style={{ color: "inherit", textDecoration: "none" }}>← Scripts</Link>
+            {script.isActive && (
+              <Link
+                href={`/scripts/${script.id}/run`}
+                style={{
+                  fontSize: "12px",
+                  fontWeight: 500,
+                  padding: "5px 12px",
+                  borderRadius: "5px",
+                  background: "var(--color-accent)",
+                  color: "#fff",
+                  textDecoration: "none",
+                }}
+              >
+                Run on a host →
+              </Link>
+            )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
             <h1 style={{ fontSize: "20px", fontWeight: 600, margin: 0, letterSpacing: "-0.01em" }}>
