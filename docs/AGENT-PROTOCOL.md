@@ -791,6 +791,351 @@ code is written:
 
 ---
 
+## 21. `scripts.*` method bodies (Phase 2)
+
+Phase 2 ships three method bodies in the `scripts.*` namespace. Full
+semantics in [`PHASE-2-DESIGN.md`](PHASE-2-DESIGN.md); this section is
+the wire contract only.
+
+### 21.1 `scripts.exec` (server → agent)
+
+```jsonc
+{ "method": "scripts.exec", "params": {
+    "commandId":     "<cuid>",
+    "scriptId":      "<cuid>",
+    "scriptBody":    "<utf-8>",
+    "scriptSig":     "<ed25519-b64>",
+    "scriptSha256":  "<hex>",
+    "interpreter":   "powershell" | "bash" | "cmd",
+    "args":          ["..."],
+    "env":           { "K": "v" },
+    "dryRun":        true,
+    "timeoutSec":    300,
+    "outputBytesCap": 65536
+}}
+```
+
+Agent verifies `scriptSha256` (recompute from `scriptBody`), then
+verifies `scriptSig` against the locally-cached tenant public-key set
+(see §13). Mismatch → reject with `script-sig-invalid` or
+`script-body-tampered`. Capability drop per script's
+`Fl_Script.capabilitiesJson`.
+
+Response is the standard `result: { state: "queued", commandId }` for
+long-running commands per §10.1.
+
+### 21.2 `scripts.output` (agent → server, notification)
+
+```jsonc
+{ "method": "scripts.output", "params": {
+    "commandId": "<cuid>",
+    "stream":    "stdout" | "stderr",
+    "seq":       0,
+    "data":      "<utf-8 chunk>"
+}}
+```
+
+≤4 KiB per frame, batched ≤200ms, backpressured per §11.
+
+### 21.3 `scripts.complete` (agent → server, notification)
+
+```jsonc
+{ "method": "scripts.complete", "params": {
+    "commandId":   "<cuid>",
+    "exitCode":    0,
+    "durationMs":  4231,
+    "outputBytes": 12384,
+    "outputUrl":   "s3://...",
+    "outputSha256": "<hex>"
+}}
+```
+
+`outputUrl` null when `outputBytes ≤ outputBytesCap`. Otherwise full
+transcript at the URL; agent uploads before sending this frame.
+
+### 21.4 `scripts.cancel` (server → agent)
+
+```jsonc
+{ "method": "scripts.cancel", "params": {
+    "commandId": "<cuid>",
+    "reason":    "operator-cancel" | "timeout" | "client-disconnect"
+}}
+```
+
+Best-effort: `SIGTERM` → 5s grace → `SIGKILL`. Windows uses
+`TerminateJobObject`. Agent still emits a `scripts.complete` frame
+with the observed exit code.
+
+---
+
+## 22. `software.*` method bodies (Phase 3)
+
+Phase 3 ships four method bodies in the `software.*` namespace plus
+two notifications. Full semantics in
+[`PHASE-3-DESIGN.md`](PHASE-3-DESIGN.md).
+
+### 22.1 `software.install` (server → agent)
+
+```jsonc
+{ "method": "software.install", "params": {
+    "commandId":    "<cuid>",
+    "deploymentId": "<cuid>",
+    "package": {
+      "id":               "<Fl_Package.id>",
+      "source":           "winget" | "choco" | "brew" | "custom",
+      "sourceId":         "<vendor id>",
+      "version":          "<exact server-pinned>",
+      "scope":            "machine" | "user",
+      "silentInstallArgs": "<string>",
+      "artifactUrl":      "https://...",   // custom only
+      "artifactSha256":   "<hex>",         // custom only
+      "bodyEd25519Sig":   "<b64>"          // when signedBody=true
+    },
+    "detectionRule": { "kind": "<rule>", ... },
+    "rebootPolicy":  "never" | "defer-if-user-active" | "force"
+                    | "schedule-window",
+    "dryRun":        true,
+    "timeoutSec":    1200,
+    "outputBytesCap": 65536
+}}
+```
+
+Agent flow:
+1. Run detection. Already at requested version → `software.complete`
+   with `result: "no-op"`.
+2. Custom source → fetch artifact, verify `artifactSha256` +
+   `bodyEd25519Sig` if `signedBody=true`.
+3. `dryRun=true` → use source-appropriate dry-run flag (winget
+   `--whatif`, brew `--dry-run`, custom MSI `msiexec /a`).
+4. Otherwise execute, stream `software.progress`.
+5. Re-run detection post-install. `software.complete` reports the
+   verified post-install version.
+
+### 22.2 `software.uninstall` (server → agent)
+
+Same envelope as `software.install` with `action="uninstall"`. Agent
+uses `Fl_Package.silentUninstallArgs` (or auto-derives for native
+package managers). Detection rule fires post-uninstall to confirm
+absence.
+
+### 22.3 `software.detect` (server → agent)
+
+```jsonc
+{ "method": "software.detect", "params": {
+    "commandId": "<cuid>",
+    "checks": [
+      { "packageId": "<Fl_Package.id>", "rule": { "kind": "...", ... } },
+      ...  // batch up to 50
+    ]
+}}
+```
+
+Lightweight (no install, no download). Used for on-demand drift
+refresh + post-deploy validation. Returns per-check
+`{ packageId, present: bool, detectedVersion?: string }`.
+
+### 22.4 `software.progress` (agent → server, notification)
+
+```jsonc
+{ "method": "software.progress", "params": {
+    "commandId": "<cuid>",
+    "phase":     "downloading" | "extracting" | "installing"
+                | "verifying" | "rebooting",
+    "percent":   47,
+    "message":   "Downloading 12.4 / 26.1 MB",
+    "stream":    "stdout" | "stderr",
+    "data":      "<utf-8 chunk>",
+    "seq":       0
+}}
+```
+
+Same batching rules as `scripts.output` (§21.2).
+
+### 22.5 `software.complete` (agent → server, notification)
+
+```jsonc
+{ "method": "software.complete", "params": {
+    "commandId":       "<cuid>",
+    "result":          "installed" | "updated" | "no-op"
+                      | "failed" | "reboot-required"
+                      | "reboot-deferred",
+    "exitCode":        0,
+    "durationMs":      47213,
+    "detectedVersion": "<post-install verify>",
+    "rebootPending":   false,
+    "stderrTail":      "<last 4 KiB>",   // inline so monitor doesn't drill
+    "outputUrl":       "s3://...",
+    "outputSha256":    "<hex>"
+}}
+```
+
+`stderrTail` inline is non-negotiable per the deploy-monitor UX
+(PHASE-3-DESIGN §8). The Phase 3 server's
+`simulateAgentResponse()` is the swap-out point that becomes this
+real callback.
+
+---
+
+## 23. `patches.*` method bodies (Phase 4)
+
+Phase 4 ships five method bodies + three notifications. Full semantics
+in [`PHASE-4-DESIGN.md`](PHASE-4-DESIGN.md).
+
+### 23.1 `patches.scan` (server → agent)
+
+```jsonc
+{ "method": "patches.scan", "params": {
+    "commandId":        "<cuid>",
+    "fullRescan":       false,
+    "detectionMethods": ["wmi-qfe", "dism-packages", "wu-history"]
+}}
+```
+
+Agent enumerates installed patches via the named methods (multi-signal
+on Windows; single-method elsewhere). Returns counts inline; full
+payload via `patches.report` notification (large).
+
+### 23.2 `patches.detect` (server → agent)
+
+```jsonc
+{ "method": "patches.detect", "params": {
+    "commandId": "<cuid>",
+    "checks": [
+      { "patchId": "<Fl_Patch.id>", "rule": { "kind": "...", ... } },
+      ...  // batch up to 50
+    ]
+}}
+```
+
+Per-check returns:
+
+```jsonc
+{ "patchId":   "<id>",
+  "methods":   { "wmiQfe": true, "dismPackages": true, "wuHistory": true },
+  "consensus": "all-yes" | "all-no" | "disagreement" }
+```
+
+The `disagreement` consensus is the alert-worthy "your dashboard is
+lying" event (PHASE-4-DESIGN §12).
+
+### 23.3 `patches.deploy` (server → agent)
+
+```jsonc
+{ "method": "patches.deploy", "params": {
+    "commandId":    "<cuid>",
+    "deploymentId": "<cuid>",
+    "patch": {
+      "id":             "<Fl_Patch.id>",
+      "source":         "ms" | "thirdparty" | "custom",
+      "sourceId":       "KB5036893" | "Adobe.Acrobat.DC@..." | "custom:<id>",
+      "isHotpatch":     true,
+      "requiresReboot": false,
+      "artifactUrl":    null | "https://...",
+      "artifactSha256": null | "<hex>",
+      "bodyEd25519Sig": null | "<b64>"
+    },
+    "preflightGate": {
+      "minDiskSpaceGb":            15,
+      "maxRamPercent":             90,
+      "requireBackupWithinHours":  24,
+      "requireNoPendingReboot":    true,
+      "requireServiceHealth":      true,
+      "respectMaintenanceMode":    true,
+      "customPreflightScriptId":   null | "<Fl_Script.id>"
+    },
+    "rebootPolicy": "never" | "defer-if-user-active" | "force"
+                   | "schedule-window",
+    "dryRun":       true,
+    "timeoutSec":   1800,
+    "outputBytesCap": 65536
+}}
+```
+
+Agent runs pre-flight gate first; failure → `patches.complete` with
+`result: "preflight-failed"` and the gate name. Hotpatch
+(`isHotpatch=true`) skips the reboot path entirely. Multi-signal
+detection re-runs post-install — disagreement becomes
+`result: "failed"` with `failureReason: "detection-disagreement"`.
+
+### 23.4 `patches.uninstall` (server → agent — the rollback path)
+
+```jsonc
+{ "method": "patches.uninstall", "params": {
+    "commandId":  "<cuid>",
+    "patchId":    "<Fl_Patch.id>",
+    "kbId":       "KB5036893",
+    "strategies": ["wusa", "dism-remove-package", "restore-point", "vm-snapshot"],
+    "timeoutSec": 1800
+}}
+```
+
+Agent attempts strategies in order. Per-strategy result:
+`success | not-applicable | declined-by-os | failed-with-error`. First
+success short-circuits. Final `patches.complete` with
+`result: "rolled-back" | "rollback-failed" | "rollback-partial"` +
+the strategy that worked.
+
+### 23.5 `patches.advisory.fire` (agent → server, notification)
+
+```jsonc
+{ "method": "patches.advisory.fire", "params": {
+    "agentId":        "<Op_Agent.id>",
+    "kbId":           "KB5036893",
+    "publishedAt":    "2026-05-02T...",
+    "classification": "critical" | "security" | "rollup" | "feature"
+                     | "definition" | "driver"
+}}
+```
+
+Agent's local Windows Update API surfaces a patch the server catalog
+hasn't ingested yet. Treated as a hint — next ingest cron picks it up
+regardless, but advisory.fire reduces "minutes vs days" lag for the
+first host to see it.
+
+### 23.6 `patches.progress` + `patches.complete` (agent → server)
+
+Same envelope as `software.progress` + `software.complete` (§22.4 +
+§22.5) with these additions to `patches.complete`:
+
+```jsonc
+{
+  "result":         "installed" | "no-op" | "failed"
+                   | "preflight-failed" | "reboot-required"
+                   | "reboot-deferred" | "rolled-back"
+                   | "rollback-failed" | "rollback-partial"
+                   | "detection-disagreement",
+  "preflightGateFailed":  null | "<gate name>",
+  "detectionConsensus":   "all-yes" | "all-no" | "disagreement",
+  "perMethodDetection":   { "wmiQfe": bool, "dismPackages": bool, "wuHistory": bool },
+  "rollbackStrategyUsed": null | "wusa" | "dism-remove-package"
+                              | "restore-point" | "vm-snapshot"
+}
+```
+
+---
+
+## 24. Phase 5 reports — no agent namespace
+
+Phase 5 (Performance + Compliance Reports) is server-side render. The
+agent-side data needed for reports flows through namespaces that
+already exist:
+
+- Performance time-series: agent's existing `inventory.report` push
+  (per §10.2) feeds `Fl_PerformanceSample` via a server-side hourly
+  rollup cron.
+- Patch posture: `Fl_PatchInstall` populated by `patches.scan` /
+  `patches.detect` (§23.1, §23.2).
+- Software inventory: `Fl_Package` + `Fl_DeploymentTarget` populated
+  by Phase 3 + Phase 1 inventory.
+- Audit chain: `Fl_AuditLog`, written server-side per HIPAA-READY §2.
+
+So **no `reports.*` namespace exists** by design. Reports are pure
+read-aggregation + PDF render server-side. The §8 namespace ownership
+table reflects this (only `inventory.*`, `scripts.*`, `software.*`,
+`patches.*`, `alert.*` are FleetHub-owned).
+
+---
+
 ## 20. Versioning of this doc
 
 This doc is the **wire contract**. Any implementation deviation
