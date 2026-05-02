@@ -3,6 +3,8 @@ import { notFound } from "next/navigation"
 import AppShell from "@/components/AppShell"
 import ActivityFeed from "@/components/ActivityFeed"
 import SeedBanner from "@/components/SeedBanner"
+import MaintenanceModeButton from "@/components/MaintenanceModeButton"
+import { prisma } from "@/lib/prisma"
 import { getDevice, getDeviceActivity, getDeviceAlerts, getDeviceScriptRuns, listDevices, relativeLastSeen } from "@/lib/devices"
 import type { DeviceAlert, DeviceRow, DeviceScriptRun } from "@/lib/devices"
 
@@ -34,11 +36,17 @@ export default async function DeviceDetailPage({
   const device = await getDevice(id)
   if (!device) notFound()
 
-  const [alerts, activity, scriptRuns, fleet] = await Promise.all([
+  const [alerts, activity, scriptRuns, fleet, maint] = await Promise.all([
     getDeviceAlerts(id),
     getDeviceActivity(id, 30),
     getDeviceScriptRuns(id, 20),
     listDevices(),
+    prisma.fl_Device
+      .findUnique({
+        where: { id },
+        select: { maintenanceMode: true, maintenanceUntil: true, maintenanceReason: true },
+      })
+      .catch(() => null),
   ])
   const fleetSize = fleet.rows.length
   const fleetAppCounts = new Map<string, number>()
@@ -54,7 +62,14 @@ export default async function DeviceDetailPage({
         <Breadcrumb device={device} />
         <Header device={device} alertCount={alerts.filter((a) => a.state === "open").length} />
         {device.isMock && <SeedBanner kind="device" />}
-        <ActionBar />
+        <ActionBar
+          deviceId={device.id}
+          maintenance={{
+            on: maint?.maintenanceMode ?? false,
+            until: maint?.maintenanceUntil ? maint.maintenanceUntil.toISOString() : null,
+            reason: maint?.maintenanceReason ?? null,
+          }}
+        />
         <TabNav active={tab} deviceId={device.id} />
         {tab === "summary"  && <SummaryTab device={device} alerts={alerts} />}
         {tab === "system"   && <SystemTab device={device} />}
@@ -153,10 +168,16 @@ function Pill({ text, mono }: { text: string; mono?: boolean }) {
   )
 }
 
-function ActionBar() {
-  // Per UI-PATTERNS.md #1: "Big visible action bar at the top." Phase 0
-  // ships the bar with the buttons disabled + phase tooltips so the
-  // affordance is built; later phases just plumb the click handlers.
+function ActionBar({
+  deviceId,
+  maintenance,
+}: {
+  deviceId: string
+  maintenance: { on: boolean; until: string | null; reason: string | null }
+}) {
+  // Per UI-PATTERNS.md #1: "Big visible action bar at the top." Phase 3
+  // ships Maintenance Mode as the first live action; the rest still
+  // phase-tooltipped until their feature ships.
   const actions = [
     { label: "Remote",     phase: "Phase 4" },
     { label: "Quick Job",  phase: "Phase 2" },
@@ -171,12 +192,19 @@ function ActionBar() {
         display: "flex",
         gap: "8px",
         flexWrap: "wrap",
+        alignItems: "flex-start",
         padding: "10px 12px",
         background: "var(--color-background-secondary)",
         border: "0.5px solid var(--color-border-tertiary)",
         borderRadius: "10px",
       }}
     >
+      <MaintenanceModeButton
+        deviceId={deviceId}
+        isOn={maintenance.on}
+        until={maintenance.until}
+        reason={maintenance.reason}
+      />
       {actions.map((a) => (
         <button
           key={a.label}

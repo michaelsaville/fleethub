@@ -97,13 +97,55 @@ model Fl_Device {
   /// into separate tables in Phase 1 if/when query needs surface.
   inventoryJson String?
   isActive      Boolean   @default(true)
+  // Phase 3 — Maintenance Mode (NinjaOne-style toggle).
+  // When true, software.* and patches.* commands are NOT dispatched and
+  // alerts from this host are tagged suppressed. Walk-away-safe for
+  // clinical procedure windows. See PHASE-3-DESIGN §7.
+  maintenanceMode      Boolean   @default(false)
+  maintenanceUntil     DateTime?
+  maintenanceReason    String?
+  maintenanceSetBy     String?
+  // Phase 3 — set true when a deploy returned reboot-deferred.
+  // Drained on next compatible window or explicit "Reboot now".
+  pendingReboot        Boolean   @default(false)
+  pendingRebootSince   DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
   @@unique([clientName, hostname])
   @@index([clientName, isOnline])
   @@index([os])
+  @@index([maintenanceMode])
   @@map("fl_devices")
+  @@schema("fleethub")
+}
+
+/// Per-tenant config singleton (FleetHub is single-tenant today, but
+/// hipaaMode + signing keys + protected processes need a per-tenant
+/// home so we don't have to re-seam later). One row per `clientName`
+/// that we manage.
+model Fl_Tenant {
+  id                          String   @id @default(cuid())
+  /// Matches TH_Client.name + Fl_Device.clientName.
+  name                        String   @unique
+  /// HIPAA mode flips: signed-script-only enforcement, signed-body
+  /// enforcement on custom packages, dry-run-by-default-with-MFA.
+  hipaaMode                   Boolean  @default(false)
+  /// JSON array of base64 Ed25519 public keys. Multi-key for rotation.
+  /// Used by agent to verify both Fl_Script.bodyEd25519Sig and
+  /// Fl_Package.bodyEd25519Sig. See PHASE-2-DESIGN §3 + PHASE-3-DESIGN §11.
+  scriptPublicKeysJson        String?
+  /// JSON array of process basenames. When agent considers
+  /// rebootPolicy=defer-if-user-active, presence of any of these
+  /// processes blocks reboot regardless of console-session state.
+  /// Default for healthcare: ["Dentrix.exe","eClinical*.exe","Eaglesoft*.exe"].
+  protectedProcessNamesJson   String?
+  defaultRingId               String?  // FK to Fl_DeployRing
+  defaultPackageRebootPolicy  String   @default("defer-if-user-active")
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  @@map("fl_tenants")
   @@schema("fleethub")
 }
 
@@ -161,6 +203,28 @@ model Fl_Script {
   /// per UI-PATTERNS — quality > quantity.
   isCurated     Boolean  @default(false)
   isActive      Boolean  @default(true)
+  // Phase 2 additions (PHASE-2-DESIGN §9):
+  /// Detached Ed25519 sig over signedHash by the tenant compliance key.
+  /// Required when any tenant has hipaaMode=true.
+  bodyEd25519Sig          String?
+  /// SHA-256 of the body bytes. Recomputed by agent at exec time.
+  bodySha256              String?
+  /// HIPAA tenants enforce this; toggle for non-HIPAA "draft" scripts.
+  requiresSignature       Boolean  @default(true)
+  /// Some scripts can't honor dry-run (one-shot remediation, irreversible).
+  /// When false, the run UI greys out the "apply" path entirely.
+  dryRunCapable           Boolean  @default(true)
+  /// e.g. "-WhatIf" (PowerShell) or "--dry-run" (bash). Passed as first
+  /// arg by agent when dryRun=true.
+  dryRunArg               String?
+  /// JSON array of CAP_* names (Linux) the agent grants to the script
+  /// child process. Empty = unprivileged.
+  capabilitiesJson        String?
+  /// JSON array of SeXxxPrivilege names (Windows JobObject).
+  windowsPrivilegesJson   String?
+  /// PHI-aware logging: when true, output may contain file content;
+  /// agent only uploads transcript when tenant has explicit opt-in.
+  outputContainsContent   Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -173,19 +237,43 @@ model Fl_Script {
 
 /// History of script runs. One row per (script, target host) pair.
 /// Drives the "recent activity" cards on device detail pages.
+/// Phase 2 doubles this row as the dispatcher state machine (per
+/// PHASE-2-DESIGN, deviation: original spec'd separate Fl_ScriptCommand
+/// + Fl_ScriptRunOutput tables, merged here for simplicity).
 model Fl_ScriptRun {
   id            String    @id @default(cuid())
   scriptId      String
   deviceId      String
   /// Tech who initiated; null for cron/scheduled runs.
   initiatedBy   String?
-  /// "queued" | "running" | "ok" | "error" | "timeout" | "cancelled" | "dryrun"
+  /// "queued" | "running" | "ok" | "error" | "timeout" | "cancelled" | "dryrun" | "rejected"
   state         String    @default("queued")
   /// stdout from agent (truncated to 64KB; full output in object storage).
   output        String?   @db.Text
+  /// Phase 2: stderr capture, separate from stdout for deploy-monitor-style
+  /// inline error display.
+  stderr        String?   @db.Text
   exitCode      Int?
   /// Was this a dry run? Defaults true per HIPAA-READY.md; tech opts in.
   dryRun        Boolean   @default(true)
+  // Phase 2 dispatch fields (PHASE-2-DESIGN §2 + §9):
+  /// JSON: stringly-typed args passed to interpreter (quoted by agent).
+  argsJson      String?
+  /// JSON: additional env vars (CommonName, Tenant, etc.).
+  envJson       String?
+  /// Hard kill at this point (default 300s).
+  timeoutSec    Int?
+  /// Total bytes captured (any cap). When > inline cap, full transcript
+  /// at outputUrl.
+  outputBytes   Int?
+  /// S3-compatible URL when output exceeds inline cap.
+  outputUrl     String?
+  /// SHA-256 of full transcript (any size).
+  outputSha256  String?
+  /// Reason if state=rejected ("script-sig-invalid", "script-body-tampered",
+  /// "agent-offline", "device-maintenance-mode", etc.)
+  rejectReason  String?
+  durationMs    Int?
   startedAt     DateTime?
   finishedAt    DateTime?
   createdAt     DateTime  @default(now())
@@ -194,5 +282,180 @@ model Fl_ScriptRun {
   @@index([scriptId, createdAt])
   @@index([state])
   @@map("fl_script_runs")
+  @@schema("fleethub")
+}
+
+// ─── PHASE 3: SOFTWARE DEPLOYMENT ──────────────────────────────────────────
+
+/// Catalog row. One per (tenant, package, OS) — Windows Chrome and
+/// macOS Chrome are separate rows. Sources (winget/choco/brew/custom)
+/// federate behind the row so the deploy UI doesn't fork by source.
+/// See PHASE-3-DESIGN §3.
+model Fl_Package {
+  id              String   @id @default(cuid())
+  tenantName      String   // Fl_Tenant.name
+  name            String   // "Google Chrome"
+  category        String?  // "browser" | "office" | "security" | "vertical" | …
+  source          String   // "winget" | "choco" | "brew" | "custom"
+  sourceId        String   // winget pkg id, choco id, brew formula, or "custom:<id>"
+  os              String   // "windows" | "macos" | "linux" | "any"
+  scope           String   @default("machine")  // "machine" | "user"
+  dryRunCapable   Boolean  @default(true)
+  /// "never" | "defer-if-user-active" | "force" | "schedule-window"
+  rebootPolicy    String   @default("defer-if-user-active")
+  /// HIPAA tenants enforce; agent verifies before install.
+  signedBody      Boolean  @default(false)
+  bodySha256      String?
+  bodyEd25519Sig  String?
+  /// Vendor metadata parsed at upload (custom MSI/PKG only):
+  /// { productCode, upgradeCode, productVersion, bundleId, … }
+  vendorMetadataJson String?
+  /// Suggested at custom-MSI upload time; editable.
+  silentInstallArgs   String?
+  silentUninstallArgs String?
+  /// JSON: detection rule (see PHASE-3-DESIGN §3.2).
+  detectionRuleJson   String?
+  isApproved      Boolean  @default(false) // operator must approve before deploy
+  archivedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  versions        Fl_PackageVersion[]
+  deployments     Fl_Deployment[]
+
+  @@index([tenantName, archivedAt, name])
+  @@index([source, sourceId])
+  @@map("fl_packages")
+  @@schema("fleethub")
+}
+
+/// Per-version row. Version pinning + custom-MSI artifact storage live here.
+model Fl_PackageVersion {
+  id                String   @id @default(cuid())
+  packageId         String
+  package           Fl_Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  version           String   // "122.0.6261.95"; vendor format, not parsed
+  releaseDate       DateTime?
+  /// Custom packages only: where the agent fetches the artifact.
+  artifactUrl       String?
+  artifactSha256    String?
+  /// Server-pinned default for new deploys.
+  isApprovedDefault Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
+  @@unique([packageId, version])
+  @@index([packageId, isApprovedDefault])
+  @@map("fl_package_versions")
+  @@schema("fleethub")
+}
+
+/// Update Ring. Per-tenant rollout shape (Action1 pattern).
+/// Stages JSON (PHASE-3-DESIGN §5):
+///   [{ name, selectorKind, selectorValue, abortFailureRate,
+///      autoPromoteAfterSec, requiresApproval }, …]
+model Fl_DeployRing {
+  id              String   @id @default(cuid())
+  tenantName      String
+  name            String   // "Standard 4-stage", "Healthcare conservative"
+  stagesJson      String   @db.Text
+  isDefault       Boolean  @default(false)
+  archivedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deployments     Fl_Deployment[]
+
+  @@index([tenantName, isDefault])
+  @@map("fl_deploy_rings")
+  @@schema("fleethub")
+}
+
+/// One deployment = one (package, version, action, ring) execution.
+/// Targets are spread across stages defined by the ring.
+model Fl_Deployment {
+  id                  String   @id @default(cuid())
+  tenantName          String
+  packageId           String
+  package             Fl_Package @relation(fields: [packageId], references: [id])
+  packageVersionId    String
+  ringId              String
+  ring                Fl_DeployRing @relation(fields: [ringId], references: [id])
+  /// "install" | "uninstall" | "update"
+  action              String
+  /// "queued" | "running" | "paused" | "auto-paused" | "completed" | "aborted"
+  status              String   @default("queued")
+  dryRun              Boolean  @default(true)
+  /// Optional override. Null = use Fl_Package.rebootPolicy.
+  rebootPolicyOverride String?
+  scheduledFor        DateTime?
+  startedAt           DateTime?
+  completedAt         DateTime?
+  pausedAt            DateTime?
+  pauseReason         String?
+  requestedBy         String   // operator email
+  totalTargets        Int      @default(0)
+  succeededCount      Int      @default(0)
+  failedCount         Int      @default(0)
+  noOpCount           Int      @default(0)
+  pendingCount        Int      @default(0)
+  rebootDeferredCount Int      @default(0)
+  /// Stage we're currently dispatching (or last completed stage if paused).
+  currentStage        String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  targets             Fl_DeploymentTarget[]
+
+  @@index([tenantName, status, createdAt])
+  @@index([packageId, createdAt])
+  @@map("fl_deployments")
+  @@schema("fleethub")
+}
+
+/// One Fl_DeploymentTarget = one host slice of one Fl_Deployment.
+model Fl_DeploymentTarget {
+  id                  String   @id @default(cuid())
+  deploymentId        String
+  deployment          Fl_Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+  deviceId            String
+  stageName           String   // matches Fl_DeployRing.stagesJson[].name
+  /// "pending" | "dispatched" | "running" | "succeeded" | "failed"
+  ///   | "no-op" | "reboot-deferred" | "skipped"
+  status              String   @default("pending")
+  attemptCount        Int      @default(0)
+  exitCode            Int?
+  durationMs          Int?
+  detectedVersionPre  String?
+  detectedVersionPost String?
+  /// Last 4 KiB of stderr — inline so deploy monitor doesn't drill.
+  stderrTail          String?  @db.Text
+  /// Last status message from agent ("Downloading 12.4 / 18.6 MB").
+  progressMessage     String?
+  progressPercent     Int?
+  outputUrl           String?  // S3 if exceeded inline cap
+  startedAt           DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([deploymentId, status])
+  @@index([deviceId, createdAt])
+  @@map("fl_deployment_targets")
+  @@schema("fleethub")
+}
+
+/// Saved target group. Created from the deploy form's
+/// "Save these targets as a Group" inline action, or manually on /groups.
+model Fl_DeviceGroup {
+  id                String   @id @default(cuid())
+  tenantName        String
+  name              String
+  /// Dynamic membership (RQL fragment). Re-evaluated at use time.
+  rql               String?
+  /// Static membership (JSON: array of Fl_Device.id strings).
+  pinnedDeviceIdsJson String?
+  createdBy         String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([tenantName, name])
+  @@map("fl_device_groups")
   @@schema("fleethub")
 }
