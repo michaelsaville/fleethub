@@ -441,6 +441,120 @@ model Fl_DeploymentTarget {
   @@schema("fleethub")
 }
 
+// ─── PHASE 4: PATCH MANAGEMENT ─────────────────────────────────────────────
+
+/// Patch catalog row. Global per (source, sourceId) — catalog is shared
+/// across tenants (KB5036893 is the same patch everywhere). Per-tenant
+/// approval lives on the row for v1; multi-tenant approval needs a
+/// separate Fl_PatchApproval table — Phase 4.5 deviation.
+/// See PHASE-4-DESIGN §3.
+model Fl_Patch {
+  id                String   @id @default(cuid())
+  /// "ms" | "thirdparty" | "custom"
+  source            String
+  /// "KB5036893" / "Adobe.Acrobat.DC@..." / "custom:<id>"
+  sourceId          String
+  os                String   // "windows" | "macos" | "linux" | "any"
+  title             String
+  /// "security" | "critical" | "definition" | "feature" | "rollup"
+  /// | "driver" | "third-party"
+  classification    String
+  /// JSON: ["CVE-2026-XXXX", ...]. Empty for non-security.
+  cveJson           String?
+  /// Highest CVSS v3.1 base score across cveJson. 0-10.
+  cvssMax           Float?
+  /// CISA Known Exploited Vulnerabilities. Bumps priority hard.
+  isKev             Boolean  @default(false)
+  /// Server 2025 / Win 11 hotpatch — install without reboot.
+  isHotpatch        Boolean  @default(false)
+  requiresReboot    Boolean?
+  /// JSON: array of Fl_Patch.id strings this patch supersedes.
+  supersedesIdsJson String?
+  /// Custom only: artifact + sig + detection.
+  artifactUrl       String?
+  artifactSha256    String?
+  bodyEd25519Sig    String?
+  /// JSON detection rule (PHASE-4-DESIGN §5.3)
+  detectionRuleJson String?
+  /// "approved" | "declined" | "needs-approval" | "deferred" | "auto-declined"
+  approvalState     String   @default("needs-approval")
+  approvedBy        String?
+  approvedAt        DateTime?
+  notes             String?
+  publishedAt       DateTime?
+  ingestedAt        DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  installs          Fl_PatchInstall[]
+
+  @@unique([source, sourceId])
+  @@index([approvalState, isKev, cvssMax])
+  @@index([os, classification])
+  @@map("fl_patches")
+  @@schema("fleethub")
+}
+
+/// CVE/advisory metadata. Hourly cron pulls NVD JSON 2.0 + CISA KEV.
+/// Linked to patches via Fl_Patch.cveJson string-array (denormalized
+/// for fast read; ingest cron is the keeper of consistency).
+model Fl_PatchAdvisory {
+  id           String   @id @default(cuid())
+  cveId        String   @unique  // "CVE-2026-XXXX"
+  cvssBase     Float?
+  cvssVector   String?
+  isKev        Boolean  @default(false)
+  kevAddedAt   DateTime?
+  /// Vendor named in the CISA KEV catalog ("Microsoft", "Adobe", ...)
+  vendor       String?
+  product      String?
+  description  String?  @db.Text
+  /// Recommendations from CISA KEV when present.
+  ransomwareUseKnown Boolean @default(false)
+  publishedAt  DateTime?
+  /// JSON: ["confidentiality","integrity","availability"]
+  impactJson   String?
+  ingestedAt   DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([isKev, cvssBase])
+  @@index([kevAddedAt])
+  @@map("fl_patch_advisories")
+  @@schema("fleethub")
+}
+
+/// Per-host per-patch state. Real population happens via patches.scan
+/// + patches.detect agent calls. v1 ships with mock-seeded rows so
+/// the Vulnerable dashboard renders against real-shaped data.
+/// See PHASE-4-DESIGN §12.
+model Fl_PatchInstall {
+  id                  String   @id @default(cuid())
+  deviceId            String
+  patchId             String
+  patch               Fl_Patch @relation(fields: [patchId], references: [id], onDelete: Cascade)
+  /// "installed" | "missing" | "failed" | "superseded" | "declined"
+  /// | "preflight-failed" | "rollback-failed" | "detection-disagreement"
+  state               String
+  /// Per-method detection result. Null when method wasn't run.
+  /// Cross-check on Windows for the "agent says yes, OS says no" case.
+  wmiQfe              Boolean?
+  dismPackages        Boolean?
+  wuHistory           Boolean?
+  lastDetectedAt      DateTime
+  /// Deployment that put this patch on the host (when known).
+  installingDeploymentId String?
+  installedAt         DateTime?
+  failureReason       String?
+  /// Free-text from the agent (DISM error, wusa exit code, etc).
+  rawDetail           String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([deviceId, patchId])
+  @@index([state, lastDetectedAt])
+  @@index([deviceId, state])
+  @@map("fl_patch_installs")
+  @@schema("fleethub")
+}
+
 /// Saved target group. Created from the deploy form's
 /// "Save these targets as a Group" inline action, or manually on /groups.
 model Fl_DeviceGroup {

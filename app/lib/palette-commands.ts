@@ -73,6 +73,14 @@ export async function parsePaletteCommand(query: string): Promise<PaletteCommand
     return resolveMaintenance(hostQ, durStr)
   }
 
+  // patch <kbId|cve> [to <client|rql>]
+  if (tokens[0] === "patch" && tokens.length >= 2) {
+    const toIdx = tokens.indexOf("to")
+    const idQ = tokens.slice(1, toIdx > 0 ? toIdx : undefined).join(" ")
+    const tgtQ = toIdx > 0 ? tokens.slice(toIdx + 1).join(" ") : null
+    return resolvePatch(idQ, tgtQ)
+  }
+
   // run script <name> [on <host>] / run <name>
   if (tokens[0] === "run" && tokens.length >= 2) {
     const isScriptKw = tokens[1] === "script"
@@ -278,6 +286,92 @@ function formatDuration(ms: number): string {
   if (ms >= 3_600_000) return `${Math.round(ms / 3_600_000)}h`
   if (ms >= 60_000) return `${Math.round(ms / 60_000)}m`
   return `${Math.round(ms / 1000)}s`
+}
+
+// ─── patch <kbId|cve> [to <client|rql>] ───────────────────────────────
+//
+// Looks for either a KB id ("KB5036893" or just "5036893") in
+// Fl_Patch.sourceId, or a CVE id ("CVE-2024-XXXX") in Fl_PatchAdvisory
+// (resolves to patches that close it). Emits one command per matching
+// patch with affected device ids pre-populated as deploy targets.
+
+async function resolvePatch(idQ: string, targetQ: string | null): Promise<PaletteCommand[]> {
+  if (!idQ) return []
+  const upper = idQ.toUpperCase()
+  const isCve = /^CVE-\d{4}-\d{4,}$/.test(upper)
+
+  if (isCve) {
+    const adv = await prisma.fl_PatchAdvisory.findUnique({ where: { cveId: upper } })
+    if (!adv) return []
+    const patches = await prisma.fl_Patch.findMany({ where: { cveJson: { not: null } } })
+    const matching = patches.filter((p) => parseCveListInline(p.cveJson).includes(upper)).slice(0, MAX_PER_VERB)
+    return Promise.all(matching.map((p) => buildPatchCommand(p, idQ, adv.isKev, targetQ)))
+  }
+
+  const stripped = upper.replace(/^KB/, "")
+  const patches = await prisma.fl_Patch.findMany({
+    where: {
+      OR: [
+        { sourceId: { contains: idQ, mode: "insensitive" } },
+        { sourceId: { contains: stripped, mode: "insensitive" } },
+      ],
+    },
+    take: MAX_PER_VERB,
+    orderBy: [{ isKev: "desc" }, { cvssMax: "desc" }, { ingestedAt: "desc" }],
+  })
+  return Promise.all(patches.map((p) => buildPatchCommand(p, idQ, p.isKev, targetQ)))
+}
+
+async function buildPatchCommand(
+  patch: { id: string; sourceId: string; title: string; source: string; os: string; isHotpatch: boolean },
+  matchToken: string,
+  isKev: boolean,
+  targetQ: string | null,
+): Promise<PaletteCommand> {
+  let targetIds: string[] = []
+  let targetSummary: string | null = null
+  if (targetQ) {
+    const probe = await prisma.fl_Device.findFirst({
+      where: { clientName: { contains: targetQ, mode: "insensitive" } },
+      select: { clientName: true },
+    })
+    const tenantName = probe?.clientName ?? targetQ
+    const matched = await resolveTargets(tenantName, targetQ)
+    targetIds = matched.ids.slice(0, 200)
+    targetSummary = matched.summary
+  } else {
+    const missing = await prisma.fl_PatchInstall.findMany({
+      where: { patchId: patch.id, state: "missing" },
+      select: { deviceId: true },
+      take: 200,
+    })
+    targetIds = missing.map((m) => m.deviceId)
+    targetSummary = `${missing.length} affected host${missing.length === 1 ? "" : "s"}`
+  }
+
+  const params = new URLSearchParams({
+    patchId: patch.id,
+    ...(targetIds.length > 0 && { targets: targetIds.join(",") }),
+  })
+  return {
+    id: `cmd:patch:${patch.id}:${matchToken}`,
+    category: "Commands",
+    label: `Deploy patch ${patch.sourceId}${targetSummary ? ` to ${targetSummary}` : ""}`,
+    hint: `${isKev ? "🚨 KEV · " : ""}${patch.source} · ${patch.os} · ${patch.title.slice(0, 60)}${patch.title.length > 60 ? "…" : ""}`,
+    href: `/deployments/new?${params.toString()}`,
+    icon: patch.isHotpatch ? "⚡" : isKev ? "🚨" : "🩹",
+  }
+}
+
+function parseCveListInline(json: string | null): string[] {
+  if (!json) return []
+  try {
+    const parsed = JSON.parse(json)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((s): s is string => typeof s === "string")
+  } catch {
+    return []
+  }
 }
 
 // ─── run script <name> [on <host>] ───────────────────────────────────

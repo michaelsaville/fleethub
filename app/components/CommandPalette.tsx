@@ -168,7 +168,7 @@ export default function CommandPalette() {
               setActiveIndex(0)
             }}
             onKeyDown={onKeyDown}
-            placeholder="deploy chrome to acme · maintenance dc01 for 4h · run script cleantemp · or search…"
+            placeholder="patch CVE-2024-… · deploy chrome to acme · maintenance dc01 for 4h · run cleantemp · or search…"
             style={{
               width: "100%",
               background: "transparent",
