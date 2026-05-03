@@ -99,6 +99,12 @@ export async function createDeployment(input: CreateDeploymentInput) {
     },
   })
 
+  // Fire the first stage at the agents. Skipped automatically when
+  // PCC2K_GATEWAY_URL is unset (admin _simulate path remains the driver).
+  if (!input.scheduledFor && stages[0]) {
+    await dispatchStageTargets(deployment.id, stages[0].name)
+  }
+
   return deployment
 }
 
@@ -328,7 +334,109 @@ export async function promoteToNextStage(deploymentId: string, by: string) {
     outcome: "ok",
     detail: { deploymentId, fromStage: snap.deployment.currentStage, toStage: next.name },
   })
+
+  // Hand the new stage's pending targets to the agents.
+  await dispatchStageTargets(deploymentId, next.name)
+
   return dep
+}
+
+// ─── Real agent dispatch (Phase 3 step 4 — replaces the simulate path) ──
+
+/**
+ * Dispatch every `pending` target in a given stage to its agent via the
+ * gateway. Called automatically at deployment creation (first stage) and
+ * on stage promotion. Targets transition pending → dispatched on success;
+ * failed dispatches mark the target failed with a clear stderrTail.
+ *
+ * If PCC2K_GATEWAY_URL isn't set, targets stay pending — the _simulate
+ * admin endpoint can still drive them for hardware-less click-throughs.
+ */
+export async function dispatchStageTargets(
+  deploymentId: string,
+  stageName: string,
+): Promise<{ dispatched: number; failed: number; skipped: number }> {
+  if (!process.env.PCC2K_GATEWAY_URL) {
+    return { dispatched: 0, failed: 0, skipped: 0 }
+  }
+  const { dispatchToAgent } = await import("@/lib/agent-dispatch")
+
+  const dep = await prisma.fl_Deployment.findUnique({
+    where: { id: deploymentId },
+    include: { package: { include: { versions: true } } },
+  })
+  if (!dep) return { dispatched: 0, failed: 0, skipped: 0 }
+  const version = dep.package.versions.find((v) => v.id === dep.packageVersionId)
+
+  const targets = await prisma.fl_DeploymentTarget.findMany({
+    where: { deploymentId, stageName, status: "pending" },
+    select: { id: true, deviceId: true },
+  })
+
+  const counts = { dispatched: 0, failed: 0, skipped: 0 }
+  for (const t of targets) {
+    const device = await prisma.fl_Device.findUnique({
+      where: { id: t.deviceId },
+      select: { agentId: true, hostname: true },
+    })
+    if (!device?.agentId) {
+      await prisma.fl_DeploymentTarget.update({
+        where: { id: t.id },
+        data: { status: "failed", stderrTail: "device has no agentId" },
+      })
+      counts.failed++
+      continue
+    }
+    const silentArgs =
+      dep.action === "uninstall"
+        ? dep.package.silentUninstallArgs
+        : dep.package.silentInstallArgs
+    const result = await dispatchToAgent({
+      agentId: device.agentId,
+      method: dep.action === "uninstall" ? "software.uninstall" : "software.install",
+      id: t.id,
+      params: {
+        commandId: t.id,
+        deploymentId: dep.id,
+        action: dep.action,
+        package: {
+          id: dep.package.id,
+          source: dep.package.source,
+          sourceId: dep.package.sourceId,
+          version: version?.version ?? "",
+          scope: dep.package.scope ?? "machine",
+          silentInstallArgs: silentArgs ?? "",
+          artifactUrl: version?.artifactUrl ?? "",
+          artifactSha256: version?.artifactSha256 ?? "",
+          bodyEd25519Sig: dep.package.bodyEd25519Sig ?? "",
+        },
+        detectionRule: dep.package.detectionRuleJson
+          ? JSON.parse(dep.package.detectionRuleJson)
+          : null,
+        rebootPolicy: dep.rebootPolicyOverride ?? dep.package.rebootPolicy ?? "never",
+        dryRun: dep.dryRun,
+        timeoutSec: 1200,
+        outputBytesCap: 65536,
+      },
+    })
+    if (result.ok) {
+      await prisma.fl_DeploymentTarget.update({
+        where: { id: t.id },
+        data: { status: "dispatched", attemptCount: { increment: 1 } },
+      })
+      counts.dispatched++
+    } else {
+      await prisma.fl_DeploymentTarget.update({
+        where: { id: t.id },
+        data: {
+          status: "failed",
+          stderrTail: `dispatch failed: ${result.error}`,
+        },
+      })
+      counts.failed++
+    }
+  }
+  return counts
 }
 
 // ─── Mock agent simulation (Phase 3 step 4 + 6 swap-out point) ────────
@@ -432,6 +540,26 @@ export async function simulateAgentResponse(
     outcome: status === "succeeded" || status === "no-op" || status === "reboot-deferred" ? "ok" : "error",
     detail: { deploymentId: target.deploymentId, targetId, status, exitCode },
   })
+}
+
+// Exported so handleSoftwareComplete in lib/agent-ingest.ts can fire the
+// same aggregate refresh + auto-pause checks the simulate path does.
+export async function onTargetCompleted(deploymentId: string, targetId: string) {
+  // pendingReboot bookkeeping is set by simulate; the real path can't
+  // distinguish "reboot-deferred from agent" from "succeeded with rebootPending"
+  // without re-fetching, so we re-fetch here.
+  const target = await prisma.fl_DeploymentTarget.findUnique({
+    where: { id: targetId },
+    select: { status: true, deviceId: true },
+  })
+  if (target?.status === "reboot-deferred") {
+    await prisma.fl_Device.update({
+      where: { id: target.deviceId },
+      data: { pendingReboot: true, pendingRebootSince: new Date() },
+    })
+  }
+  await refreshDeploymentCounters(deploymentId)
+  await maybeAutoPause(deploymentId)
 }
 
 async function refreshDeploymentCounters(deploymentId: string) {

@@ -2,6 +2,7 @@ import "server-only"
 import { z } from "zod"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
+import { onTargetCompleted } from "@/lib/deployments"
 
 /**
  * Phase 1 ingest handlers. The WSS gateway terminates JSON-RPC + mTLS
@@ -162,12 +163,54 @@ const scriptsComplete = z.object({
   exitMessage: z.string().nullish(),
 })
 
+// Phase 3 — software.* notifications from agent (AGENT-PROTOCOL §22.4/§22.5).
+// commandId equals Fl_DeploymentTarget.id — agent uses whatever id the gateway
+// dispatch passed it.
+const softwareProgress = z.object({
+  method: z.literal("software.progress"),
+  agentId: z.string().min(1),
+  ts: z.string(),
+  commandId: z.string().min(1),
+  // Phase per §22.4. Some frames carry only metadata (no stream chunk).
+  phase: z.enum(["downloading", "extracting", "installing", "verifying", "rebooting"]).optional(),
+  percent: z.number().int().min(0).max(100).optional(),
+  message: z.string().optional(),
+  // Streamed chunk frames carry stream + seq + data; metadata frames don't.
+  stream: z.enum(["stdout", "stderr"]).optional(),
+  seq: z.number().int().nonnegative().optional(),
+  data: z.string().optional(),
+})
+
+const softwareComplete = z.object({
+  method: z.literal("software.complete"),
+  agentId: z.string().min(1),
+  ts: z.string(),
+  commandId: z.string().min(1),
+  result: z.enum([
+    "installed",
+    "updated",
+    "no-op",
+    "failed",
+    "reboot-required",
+    "reboot-deferred",
+  ]),
+  exitCode: z.number().int(),
+  durationMs: z.number().int().nonnegative(),
+  detectedVersion: z.string().nullish(),
+  rebootPending: z.boolean().optional(),
+  stderrTail: z.string().nullish(),
+  outputUrl: z.string().nullish(),
+  outputSha256: z.string().nullish(),
+})
+
 const envelope = z.discriminatedUnion("method", [
   inventoryReport,
   heartbeat,
   alertFire,
   scriptsOutput,
   scriptsComplete,
+  softwareProgress,
+  softwareComplete,
 ])
 
 export type AgentEnvelope = z.infer<typeof envelope>
@@ -203,6 +246,8 @@ export async function handleAgentEnvelope(raw: unknown): Promise<IngestResult> {
         "alert.fire",
         "scripts.output",
         "scripts.complete",
+        "software.progress",
+        "software.complete",
       ]
       if (!supported.includes(m as AgentEnvelope["method"])) {
         throw new MethodNotSupportedError(m)
@@ -221,6 +266,10 @@ export async function handleAgentEnvelope(raw: unknown): Promise<IngestResult> {
       return handleScriptsOutput(parsed.data)
     case "scripts.complete":
       return handleScriptsComplete(parsed.data)
+    case "software.progress":
+      return handleSoftwareProgress(parsed.data)
+    case "software.complete":
+      return handleSoftwareComplete(parsed.data)
   }
 }
 
@@ -415,5 +464,133 @@ async function handleScriptsComplete(env: z.infer<typeof scriptsComplete>): Prom
 
   return { method: "scripts.complete", deviceId: run.deviceId, commandId: env.commandId, state: nextState }
 }
+
+// ─── software.* handlers (Phase 3) ────────────────────────────────────────
+//
+// Both notifications are keyed by commandId = Fl_DeploymentTarget.id.
+// software.progress streams the deploy-monitor "Downloading 12.4 / 26.1 MB"
+// surface; software.complete is the terminal frame mapping result enum to
+// Fl_DeploymentTarget.status. lib/deployments.ts:simulateAgentResponse() is
+// the prior mock — these handlers replace it once dispatchToAgent is wired.
+
+const TARGET_STDERR_TAIL_BYTES = 4 * 1024
+
+async function handleSoftwareProgress(env: z.infer<typeof softwareProgress>): Promise<IngestResult> {
+  const target = await prisma.fl_DeploymentTarget.findUnique({
+    where: { id: env.commandId },
+    select: { id: true, deviceId: true, status: true, stderrTail: true },
+  })
+  if (!target) {
+    throw new Error(`software.progress: unknown commandId ${env.commandId}`)
+  }
+
+  const update: Record<string, unknown> = {}
+
+  // First progress frame transitions dispatched → running and stamps startedAt.
+  if (target.status === "dispatched" || target.status === "pending") {
+    update.status = "running"
+    update.startedAt = new Date()
+  }
+  if (env.message) update.progressMessage = env.message
+  if (env.percent !== undefined) update.progressPercent = env.percent
+
+  // Streamed stderr chunks accumulate into stderrTail (truncated to last
+  // TARGET_STDERR_TAIL_BYTES). stdout chunks are dropped server-side for v1
+  // — Phase 3.5 will pump them to S3 when the package emits enough volume.
+  if (env.stream === "stderr" && env.data) {
+    const existing = target.stderrTail ?? ""
+    const merged = existing + env.data
+    update.stderrTail =
+      merged.length > TARGET_STDERR_TAIL_BYTES
+        ? merged.slice(merged.length - TARGET_STDERR_TAIL_BYTES)
+        : merged
+  }
+
+  if (Object.keys(update).length > 0) {
+    await prisma.fl_DeploymentTarget.update({ where: { id: env.commandId }, data: update })
+  }
+  return { method: "software.progress", deviceId: target.deviceId, commandId: env.commandId }
+}
+
+async function handleSoftwareComplete(env: z.infer<typeof softwareComplete>): Promise<IngestResult> {
+  const target = await prisma.fl_DeploymentTarget.findUnique({
+    where: { id: env.commandId },
+    select: { id: true, deviceId: true, deploymentId: true, startedAt: true, status: true },
+  })
+  if (!target) {
+    throw new Error(`software.complete: unknown commandId ${env.commandId}`)
+  }
+
+  // Map agent result → Fl_DeploymentTarget.status enum per schema doc.
+  let nextStatus: string
+  switch (env.result) {
+    case "installed":
+    case "updated":
+      nextStatus = "succeeded"
+      break
+    case "no-op":
+      nextStatus = "no-op"
+      break
+    case "reboot-required":
+      // Server treats as success — orchestrator decides whether to reboot or
+      // mark reboot-deferred per Fl_Deployment.rebootPolicy.
+      nextStatus = "succeeded"
+      break
+    case "reboot-deferred":
+      nextStatus = "reboot-deferred"
+      break
+    case "failed":
+    default:
+      nextStatus = "failed"
+      break
+  }
+
+  const completedAt = new Date()
+  await prisma.fl_DeploymentTarget.update({
+    where: { id: env.commandId },
+    data: {
+      status: nextStatus,
+      exitCode: env.exitCode,
+      durationMs: env.durationMs,
+      detectedVersionPost: env.detectedVersion ?? null,
+      stderrTail: env.stderrTail ?? null,
+      outputUrl: env.outputUrl ?? null,
+      completedAt,
+      ...(target.startedAt
+        ? {}
+        : { startedAt: new Date(completedAt.getTime() - env.durationMs) }),
+    },
+  })
+
+  const device = await prisma.fl_Device.findUnique({
+    where: { id: target.deviceId },
+    select: { clientName: true },
+  })
+  await writeAudit({
+    deviceId: target.deviceId,
+    clientName: device?.clientName ?? null,
+    action: "software.deployment.target-complete",
+    outcome: nextStatus === "succeeded" || nextStatus === "no-op" ? "ok" : "error",
+    detail: {
+      targetId: env.commandId,
+      deploymentId: target.deploymentId,
+      result: env.result,
+      exitCode: env.exitCode,
+      durationMs: env.durationMs,
+      detectedVersion: env.detectedVersion ?? null,
+      rebootPending: env.rebootPending ?? false,
+    },
+  })
+
+  await onTargetCompleted(target.deploymentId, env.commandId)
+
+  return {
+    method: "software.complete",
+    deviceId: target.deviceId,
+    commandId: env.commandId,
+    state: nextStatus,
+  }
+}
+
 
 
