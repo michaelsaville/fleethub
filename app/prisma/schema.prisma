@@ -142,6 +142,22 @@ model Fl_Tenant {
   protectedProcessNamesJson   String?
   defaultRingId               String?  // FK to Fl_DeployRing
   defaultPackageRebootPolicy  String   @default("defer-if-user-active")
+
+  // Phase 5 — per-tenant report branding.
+  /// Logo for the report PDF cover. Path under /api/uploads/...
+  reportLogoUrl       String?
+  /// Hex accent color used in PDF section dividers + headline numbers.
+  reportAccentColor   String  @default("#F97316")
+  /// Optional footer text on every PDF page (compliance disclaimer, etc).
+  reportFooterText    String?
+  /// Days to retain generated artifacts. HIPAA default = 6 * 365.
+  reportRetentionDays Int     @default(2190)
+  /// Phase 5.5 — opt-in Claude API hook for QBR cover-page narrative.
+  qbrAutoNarrative    Boolean @default(false)
+  /// Phase 5.5 — Scout integration; lets Identity Posture report pull
+  /// the latest IdentityAuditResults for this tenant from the Scout app.
+  scoutTenantId       String?
+
   createdAt                   DateTime @default(now())
   updatedAt                   DateTime @updatedAt
 
@@ -571,5 +587,82 @@ model Fl_DeviceGroup {
 
   @@index([tenantName, name])
   @@map("fl_device_groups")
+  @@schema("fleethub")
+}
+
+// ─── PHASE 5: REPORTS ──────────────────────────────────────────────────────
+
+/// One generated report artifact. Operator-initiated rows arrive in
+/// state="queued" and the render worker (today: synchronous in the
+/// generate API route) drives them through generating → ready. Scheduled
+/// generation (Fl_ReportSchedule) is Phase 5.5; v1 is ad-hoc only.
+model Fl_Report {
+  id             String   @id @default(cuid())
+  /// "patch-compliance" | "software-inventory" | "performance-trend"
+  /// | "identity-posture" | "qbr"
+  kind           String
+  tenantName     String
+  /// "tech" | "client" | "auditor" — toggles which sections render.
+  audience       String   @default("client")
+  /// Inclusive ISO date range. Some reports are point-in-time
+  /// snapshots (asOf); others are intervals (start..end).
+  asOf           DateTime?
+  startDate      DateTime?
+  endDate        DateTime?
+  /// "pdf" | "csv" | "json" | "evidence-zip"
+  format         String   @default("pdf")
+  /// Local filesystem path under /uploads/reports/ for v1; S3-compatible
+  /// URL once the storage swap-out lands. Null until state=ready.
+  artifactUrl    String?
+  artifactSha256 String?
+  artifactBytes  Int?
+  /// Generation context — cron schedule id (when scheduled) or
+  /// operator email (when ad-hoc).
+  generatedBy    String
+  scheduleId     String?
+  /// "queued" | "generating" | "ready" | "delivered" | "failed" | "expired"
+  state          String   @default("queued")
+  failureReason  String?
+  /// state="expired" + artifactUrl cleared after this date. Defaults
+  /// derive from Fl_Tenant.reportRetentionDays at create time.
+  retentionUntil DateTime
+  generatedAt    DateTime?
+  deliveredAt    DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([tenantName, kind, createdAt])
+  @@index([state, retentionUntil])
+  @@map("fl_reports")
+  @@schema("fleethub")
+}
+
+/// Per-host aggregated performance samples. Agent's existing
+/// inventory.report push (every 15min) feeds the row-level columns; a
+/// server-side cron rolls 15-min samples → 1h, 1h → 1d, 1d → 7d.
+/// Tier retention: 1h kept 30d, 1d kept 13mo, 7d kept 6 years.
+model Fl_PerformanceSample {
+  id               String   @id @default(cuid())
+  deviceId         String
+  /// Aggregation window. "1h" | "1d" | "7d"
+  window           String
+  /// Window start (inclusive). UTC.
+  windowStart      DateTime
+  cpuAvgPct        Float
+  cpuP95Pct        Float
+  ramAvgPct        Float
+  ramP95Pct        Float
+  diskUsedPct      Float
+  /// Network bytes-in/out summed across interfaces.
+  netInBytes       BigInt   @default(0)
+  netOutBytes      BigInt   @default(0)
+  uptimeSec        BigInt   @default(0)
+  /// Count of agent.heartbeat misses in this window — gaps in
+  /// monitoring affect report confidence.
+  missedHeartbeats Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  @@unique([deviceId, window, windowStart])
+  @@index([window, windowStart])
+  @@map("fl_performance_samples")
   @@schema("fleethub")
 }

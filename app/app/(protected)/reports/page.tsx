@@ -1,6 +1,7 @@
 import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import SeedBanner from "@/components/SeedBanner"
+import { prisma } from "@/lib/prisma"
 import { getCompliance, getDiskPressure, getEolHosts, getFleetSnapshot, getLifecycle, getMemoryPressure, getOsDistribution, getStaleBoots } from "@/lib/reports"
 import type { ComplianceRow, EolHostRow, LifecycleRow, OsDistributionRow, PressureRow } from "@/lib/reports"
 
@@ -17,7 +18,7 @@ export const dynamic = "force-dynamic"
  * the queries that feed them are real today.
  */
 export default async function ReportsPage() {
-  const [snapshot, compliance, osDist, eol, lifecycle, disk, ram, boots] = await Promise.all([
+  const [snapshot, compliance, osDist, eol, lifecycle, disk, ram, boots, recentReports] = await Promise.all([
     getFleetSnapshot(),
     getCompliance(),
     getOsDistribution(),
@@ -26,6 +27,7 @@ export default async function ReportsPage() {
     getDiskPressure(85),
     getMemoryPressure(80),
     getStaleBoots(30),
+    prisma.fl_Report.findMany({ orderBy: { createdAt: "desc" }, take: 6 }),
   ])
 
   return (
@@ -46,6 +48,8 @@ export default async function ReportsPage() {
         </header>
 
         {snapshot.isMock && <SeedBanner kind="fleet" />}
+
+        <GeneratedReportsCard reports={recentReports} />
 
         <SnapshotStrip snapshot={snapshot} />
 
@@ -405,4 +409,158 @@ const tdStyle: React.CSSProperties = {
   padding: "6px 8px",
   color: "var(--color-text-primary)",
   verticalAlign: "top",
+}
+
+// Phase 5 — generated PDF artifacts list. Lives at the top of /reports
+// alongside the existing dashboard-style cross-cuts so operators land here
+// for both "show me current state" and "give me a PDF for the QBR."
+function GeneratedReportsCard({
+  reports,
+}: {
+  reports: Array<{
+    id: string
+    kind: string
+    tenantName: string
+    audience: string
+    state: string
+    artifactBytes: number | null
+    createdAt: Date
+    generatedAt: Date | null
+  }>
+}) {
+  return (
+    <section
+      style={{
+        background: "var(--color-background-secondary)",
+        border: "0.5px solid var(--color-border-tertiary)",
+        borderRadius: 10,
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          padding: "10px 14px",
+          borderBottom: "0.5px solid var(--color-border-tertiary)",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            color: "var(--color-text-muted)",
+            textTransform: "uppercase",
+            letterSpacing: "0.07em",
+          }}
+        >
+          Generated PDF reports
+        </div>
+        <Link
+          href="/reports/new"
+          style={{
+            fontSize: 12,
+            fontWeight: 500,
+            padding: "6px 12px",
+            borderRadius: 6,
+            background: "var(--color-accent)",
+            color: "#fff",
+            textDecoration: "none",
+            border: "0.5px solid var(--color-border-secondary)",
+          }}
+        >
+          Generate report →
+        </Link>
+      </div>
+      <div style={{ padding: 14 }}>
+        {reports.length === 0 ? (
+          <p style={{ fontSize: 12.5, color: "var(--color-text-muted)", margin: 0 }}>
+            No reports generated yet.
+          </p>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr
+                style={{
+                  color: "var(--color-text-muted)",
+                  fontSize: 10.5,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 600 }}>Kind</th>
+                <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 600 }}>Tenant</th>
+                <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 600 }}>Audience</th>
+                <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 600 }}>State</th>
+                <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 600 }}>Size</th>
+                <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 600 }}>Created</th>
+                <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 600 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {reports.map((r) => (
+                <tr
+                  key={r.id}
+                  style={{ borderTop: "0.5px solid var(--color-border-tertiary)" }}
+                >
+                  <td style={{ padding: "6px 10px", fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 11.5 }}>
+                    {r.kind}
+                  </td>
+                  <td style={{ padding: "6px 10px" }}>{r.tenantName}</td>
+                  <td style={{ padding: "6px 10px", color: "var(--color-text-muted)" }}>
+                    {r.audience}
+                  </td>
+                  <td style={{ padding: "6px 10px" }}>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        padding: "2px 7px",
+                        borderRadius: 3,
+                        background: stateBg(r.state),
+                        color: "#fff",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.05em",
+                      }}
+                    >
+                      {r.state}
+                    </span>
+                  </td>
+                  <td style={{ padding: "6px 10px", color: "var(--color-text-muted)" }}>
+                    {r.artifactBytes ? formatBytes(r.artifactBytes) : "-"}
+                  </td>
+                  <td style={{ padding: "6px 10px", color: "var(--color-text-muted)" }}>
+                    {new Date(r.createdAt).toLocaleString()}
+                  </td>
+                  <td style={{ padding: "6px 10px", textAlign: "right" }}>
+                    <Link
+                      href={`/reports/${r.id}`}
+                      style={{ fontSize: 11.5, color: "var(--color-accent)", textDecoration: "none" }}
+                    >
+                      View →
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function stateBg(state: string): string {
+  if (state === "ready" || state === "delivered") return "var(--color-success)"
+  if (state === "generating" || state === "queued") return "var(--color-warning)"
+  if (state === "failed") return "var(--color-danger)"
+  return "var(--color-text-muted)"
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
