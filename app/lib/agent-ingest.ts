@@ -136,7 +136,39 @@ const alertFire = z.object({
   }),
 })
 
-const envelope = z.discriminatedUnion("method", [inventoryReport, heartbeat, alertFire])
+// Phase 2 — scripts.* notifications from agent.
+// scripts.output is streamed in ≤4KiB chunks per AGENT-PROTOCOL §21.2.
+// scripts.complete is the terminal frame per §21.3.
+const scriptsOutput = z.object({
+  method: z.literal("scripts.output"),
+  agentId: z.string().min(1),
+  ts: z.string(),
+  commandId: z.string().min(1),
+  stream: z.enum(["stdout", "stderr"]),
+  seq: z.number().int().nonnegative(),
+  data: z.string(),
+})
+
+const scriptsComplete = z.object({
+  method: z.literal("scripts.complete"),
+  agentId: z.string().min(1),
+  ts: z.string(),
+  commandId: z.string().min(1),
+  exitCode: z.number().int(),
+  durationMs: z.number().int().nonnegative(),
+  outputBytes: z.number().int().nonnegative(),
+  outputUrl: z.string().nullish(),
+  outputSha256: z.string().nullish(),
+  exitMessage: z.string().nullish(),
+})
+
+const envelope = z.discriminatedUnion("method", [
+  inventoryReport,
+  heartbeat,
+  alertFire,
+  scriptsOutput,
+  scriptsComplete,
+])
 
 export type AgentEnvelope = z.infer<typeof envelope>
 
@@ -144,6 +176,8 @@ export interface IngestResult {
   method: AgentEnvelope["method"]
   deviceId: string
   alertId?: string
+  commandId?: string
+  state?: string
 }
 
 export class MethodNotSupportedError extends Error {
@@ -167,6 +201,8 @@ export async function handleAgentEnvelope(raw: unknown): Promise<IngestResult> {
         "inventory.report",
         "agent.heartbeat",
         "alert.fire",
+        "scripts.output",
+        "scripts.complete",
       ]
       if (!supported.includes(m as AgentEnvelope["method"])) {
         throw new MethodNotSupportedError(m)
@@ -181,6 +217,10 @@ export async function handleAgentEnvelope(raw: unknown): Promise<IngestResult> {
       return handleHeartbeat(parsed.data)
     case "alert.fire":
       return handleAlertFire(parsed.data)
+    case "scripts.output":
+      return handleScriptsOutput(parsed.data)
+    case "scripts.complete":
+      return handleScriptsComplete(parsed.data)
   }
 }
 
@@ -278,3 +318,102 @@ async function handleAlertFire(env: z.infer<typeof alertFire>): Promise<IngestRe
   })
   return { method: "alert.fire", deviceId: device.id, alertId: alert.id }
 }
+
+// ─── scripts.* handlers (Phase 2) ─────────────────────────────────────────
+//
+// Both notifications are keyed by commandId, which equals Fl_ScriptRun.id —
+// the agent uses whatever id the gateway dispatch passed it. We append
+// output chunks to the matching run, transitioning state queued → running
+// on first chunk; completion lands the terminal state + exit code.
+
+const RUN_OUTPUT_CAP_BYTES = 64 * 1024
+
+async function handleScriptsOutput(env: z.infer<typeof scriptsOutput>): Promise<IngestResult> {
+  const run = await prisma.fl_ScriptRun.findUnique({
+    where: { id: env.commandId },
+    select: { id: true, deviceId: true, state: true, output: true, stderr: true },
+  })
+  if (!run) {
+    throw new Error(`scripts.output: unknown commandId ${env.commandId}`)
+  }
+
+  // Append, capped at RUN_OUTPUT_CAP_BYTES per stream. Anything past that
+  // would land in S3 once Phase 5 storage is wired; for now we truncate.
+  const existing = (env.stream === "stdout" ? run.output : run.stderr) ?? ""
+  const room = Math.max(0, RUN_OUTPUT_CAP_BYTES - existing.length)
+  const appended = room > 0 ? existing + env.data.slice(0, room) : existing
+
+  const update: Record<string, unknown> = {}
+  update[env.stream === "stdout" ? "output" : "stderr"] = appended
+  // First chunk transitions queued → running and stamps startedAt.
+  if (run.state === "queued") {
+    update.state = "running"
+    update.startedAt = new Date()
+  }
+
+  await prisma.fl_ScriptRun.update({ where: { id: env.commandId }, data: update })
+  return { method: "scripts.output", deviceId: run.deviceId, commandId: env.commandId }
+}
+
+async function handleScriptsComplete(env: z.infer<typeof scriptsComplete>): Promise<IngestResult> {
+  const run = await prisma.fl_ScriptRun.findUnique({
+    where: { id: env.commandId },
+    select: { id: true, deviceId: true, dryRun: true, startedAt: true, state: true },
+  })
+  if (!run) {
+    throw new Error(`scripts.complete: unknown commandId ${env.commandId}`)
+  }
+
+  // Map exit code + exitMessage to terminal state per Fl_ScriptRun spec.
+  let nextState: string
+  if (run.dryRun) {
+    nextState = "dryrun"
+  } else if (env.exitMessage === "timeout") {
+    nextState = "timeout"
+  } else if (env.exitMessage === "cancelled" || run.state === "cancelled") {
+    nextState = "cancelled"
+  } else if (env.exitCode === 0) {
+    nextState = "ok"
+  } else {
+    nextState = "error"
+  }
+
+  const finishedAt = new Date()
+  await prisma.fl_ScriptRun.update({
+    where: { id: env.commandId },
+    data: {
+      state: nextState,
+      exitCode: env.exitCode,
+      durationMs: env.durationMs,
+      outputBytes: env.outputBytes,
+      outputUrl: env.outputUrl ?? null,
+      outputSha256: env.outputSha256 ?? null,
+      finishedAt,
+      // startedAt may have been stamped by handleScriptsOutput already;
+      // backfill if no output ever came back.
+      ...(run.startedAt ? {} : { startedAt: new Date(finishedAt.getTime() - env.durationMs) }),
+    },
+  })
+
+  const device = await prisma.fl_Device.findUnique({
+    where: { id: run.deviceId },
+    select: { clientName: true },
+  })
+  await writeAudit({
+    deviceId: run.deviceId,
+    clientName: device?.clientName ?? null,
+    action: "scripts.complete",
+    outcome: nextState === "ok" || nextState === "dryrun" ? "ok" : "error",
+    detail: {
+      runId: env.commandId,
+      exitCode: env.exitCode,
+      durationMs: env.durationMs,
+      outputBytes: env.outputBytes,
+      state: nextState,
+    },
+  })
+
+  return { method: "scripts.complete", deviceId: run.deviceId, commandId: env.commandId, state: nextState }
+}
+
+

@@ -2,6 +2,7 @@ import "server-only"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { isInMaintenance } from "@/lib/maintenance"
+import { dispatchToAgent } from "@/lib/agent-dispatch"
 
 // Phase 2 dispatcher. Creates Fl_ScriptRun rows in queued state and
 // (in mock-mode) lets the operator simulate agent responses for
@@ -78,6 +79,46 @@ export async function runScript(input: RunScriptInput) {
       capabilities: script.capabilitiesJson ?? null,
     },
   })
+
+  // Real dispatch via the WSS gateway. If the gateway URL isn't set
+  // (dev without a gateway running) the run stays in `queued` and the
+  // admin _simulate endpoint can still drive it. If the agent isn't
+  // connected we mark the run rejected and audit the reason.
+  if (process.env.PCC2K_GATEWAY_URL && device.agentId) {
+    const result = await dispatchToAgent({
+      agentId: device.agentId,
+      method: "scripts.exec",
+      id: run.id,
+      params: {
+        commandId: run.id,
+        scriptId: script.id,
+        scriptBody: script.body,
+        scriptSig: script.bodyEd25519Sig ?? "",
+        signerKid: "", // Phase 2.5 — when bodyEd25519SignerKid lands.
+        scriptSha256: script.bodySha256 ?? "",
+        interpreter: script.shell,
+        args: input.args ?? [],
+        env: input.env ?? {},
+        dryRun,
+        timeoutSec: input.timeoutSec ?? 300,
+        outputBytesCap: 65536,
+      },
+    })
+    if (!result.ok) {
+      await prisma.fl_ScriptRun.update({
+        where: { id: run.id },
+        data: { state: "rejected", rejectReason: `dispatch:${result.error}` },
+      })
+      await writeAudit({
+        actorEmail: input.initiatedBy,
+        clientName: device.clientName,
+        deviceId: device.id,
+        action: "scripts.dispatch.rejected",
+        outcome: "error",
+        detail: { runId: run.id, status: result.status, error: result.error },
+      })
+    }
+  }
 
   return run
 }
