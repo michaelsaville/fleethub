@@ -14,6 +14,11 @@ const REPORT_KINDS: Array<{ value: string; label: string; help: string }> = [
     label: "Software Inventory",
     help: "Catalog summary, version drift by package, recent deployments.",
   },
+  {
+    value: "performance-trend",
+    label: "Performance Trend",
+    help: "Fleet CPU / RAM / disk over the window plus pressure list and EOL hosts.",
+  },
 ]
 
 export default function NewReportForm({ tenants }: { tenants: string[] }) {

@@ -7,8 +7,10 @@ import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { buildPatchComplianceReport } from "@/lib/reports/patch-compliance"
 import { buildSoftwareInventoryReport } from "@/lib/reports/software-inventory"
+import { buildPerformanceTrendReport } from "@/lib/reports/performance-trend"
 import { PatchComplianceReport } from "@/lib/pdf/PatchComplianceReport"
 import { SoftwareInventoryReport } from "@/lib/pdf/SoftwareInventoryReport"
+import { PerformanceTrendReport } from "@/lib/pdf/PerformanceTrendReport"
 
 // V1 storage: local disk under REPORTS_DIR (default /tmp/fleethub-reports).
 // PHASE-5-DESIGN §4 calls out S3 streaming for large PDFs — Phase 5.5
@@ -23,7 +25,11 @@ export type ReportKind =
   | "identity-posture"
   | "qbr"
 
-export const SUPPORTED_KINDS: ReportKind[] = ["patch-compliance", "software-inventory"]
+export const SUPPORTED_KINDS: ReportKind[] = [
+  "patch-compliance",
+  "software-inventory",
+  "performance-trend",
+]
 
 export async function generateReport(reportId: string): Promise<void> {
   const report = await prisma.fl_Report.findUnique({ where: { id: reportId } })
@@ -62,6 +68,20 @@ export async function generateReport(reportId: string): Promise<void> {
         audience: report.audience as "tech" | "client" | "auditor",
       })
       const element = SoftwareInventoryReport({
+        data,
+        footerText: tenant?.reportFooterText ?? null,
+        generatedAt: new Date(),
+      })
+      buffer = await renderToBuffer(element)
+    } else if (report.kind === "performance-trend") {
+      const data = await buildPerformanceTrendReport({
+        tenantName: report.tenantName,
+        asOf: report.asOf ?? undefined,
+        startDate: report.startDate ?? undefined,
+        endDate: report.endDate ?? undefined,
+        audience: report.audience as "tech" | "client" | "auditor",
+      })
+      const element = PerformanceTrendReport({
         data,
         footerText: tenant?.reportFooterText ?? null,
         generatedAt: new Date(),
