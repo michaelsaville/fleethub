@@ -203,6 +203,83 @@ const softwareComplete = z.object({
   outputSha256: z.string().nullish(),
 })
 
+// Phase 4 — patches.* notifications + report (AGENT-PROTOCOL §23.5 / §23.6).
+// commandId on progress/complete = Fl_PatchInstall.id (or a transient id for
+// scan that we de-correlate via patches.report).
+const patchesProgress = z.object({
+  method: z.literal("patches.progress"),
+  agentId: z.string().min(1),
+  ts: z.string(),
+  commandId: z.string().min(1),
+  phase: z.enum(["downloading", "extracting", "installing", "verifying", "rebooting"]).optional(),
+  percent: z.number().int().min(0).max(100).optional(),
+  message: z.string().optional(),
+  stream: z.enum(["stdout", "stderr"]).optional(),
+  seq: z.number().int().nonnegative().optional(),
+  data: z.string().optional(),
+})
+
+const patchesComplete = z.object({
+  method: z.literal("patches.complete"),
+  agentId: z.string().min(1),
+  ts: z.string(),
+  commandId: z.string().min(1),
+  result: z.enum([
+    "installed",
+    "no-op",
+    "failed",
+    "preflight-failed",
+    "reboot-required",
+    "reboot-deferred",
+    "rolled-back",
+    "rollback-failed",
+    "rollback-partial",
+    "detection-disagreement",
+  ]),
+  exitCode: z.number().int(),
+  durationMs: z.number().int().nonnegative(),
+  rebootPending: z.boolean().optional(),
+  detectedVersion: z.string().nullish(),
+  stderrTail: z.string().nullish(),
+  preflightGateFailed: z.string().nullish(),
+  detectionConsensus: z.enum(["all-yes", "all-no", "disagreement"]).optional(),
+  perMethodDetection: z.record(z.string(), z.boolean()).optional(),
+  rollbackStrategyUsed: z.string().nullish(),
+})
+
+// Agent → server notification when local Windows Update API surfaces a KB
+// the catalog hasn't ingested yet. Cheap "minutes vs days" hint.
+const patchesAdvisoryFire = z.object({
+  method: z.literal("patches.advisory.fire"),
+  agentId: z.string().min(1),
+  ts: z.string(),
+  kbId: z.string().min(1),
+  publishedAt: z.string().optional(),
+  classification: z.enum(["critical", "security", "rollup", "feature", "definition", "driver"]).optional(),
+})
+
+// patches.scan dispatches a scan; the agent posts back patches.report with
+// the full enumerated list (large payload, kept off the response path).
+const patchesReport = z.object({
+  method: z.literal("patches.report"),
+  agentId: z.string().min(1),
+  ts: z.string(),
+  commandId: z.string().min(1),
+  installedCount: z.number().int().nonnegative().optional(),
+  patches: z.array(z.object({
+    source: z.string(),
+    sourceId: z.string(),
+    title: z.string().optional(),
+    size: z.string().optional(),
+    arch: z.string().optional(),
+    repo: z.string().optional(),
+    classification: z.string().optional(),
+    availableVersion: z.string().optional(),
+    installedVersion: z.string().optional(),
+  })).optional(),
+  error: z.string().optional(),
+})
+
 const envelope = z.discriminatedUnion("method", [
   inventoryReport,
   heartbeat,
@@ -211,6 +288,10 @@ const envelope = z.discriminatedUnion("method", [
   scriptsComplete,
   softwareProgress,
   softwareComplete,
+  patchesProgress,
+  patchesComplete,
+  patchesAdvisoryFire,
+  patchesReport,
 ])
 
 export type AgentEnvelope = z.infer<typeof envelope>
@@ -248,6 +329,10 @@ export async function handleAgentEnvelope(raw: unknown): Promise<IngestResult> {
         "scripts.complete",
         "software.progress",
         "software.complete",
+        "patches.progress",
+        "patches.complete",
+        "patches.advisory.fire",
+        "patches.report",
       ]
       if (!supported.includes(m as AgentEnvelope["method"])) {
         throw new MethodNotSupportedError(m)
@@ -270,6 +355,14 @@ export async function handleAgentEnvelope(raw: unknown): Promise<IngestResult> {
       return handleSoftwareProgress(parsed.data)
     case "software.complete":
       return handleSoftwareComplete(parsed.data)
+    case "patches.progress":
+      return handlePatchesProgress(parsed.data)
+    case "patches.complete":
+      return handlePatchesComplete(parsed.data)
+    case "patches.advisory.fire":
+      return handlePatchesAdvisoryFire(parsed.data)
+    case "patches.report":
+      return handlePatchesReport(parsed.data)
   }
 }
 
@@ -591,6 +684,252 @@ async function handleSoftwareComplete(env: z.infer<typeof softwareComplete>): Pr
     state: nextStatus,
   }
 }
+
+// ─── patches.* handlers (Phase 4) ─────────────────────────────────────────
+//
+// commandId on progress/complete = Fl_PatchInstall.id created at dispatch
+// time by lib/patch-deploy.ts. patches.report is keyed by the scan's
+// transient commandId — not stored as a row, just used to associate the
+// scan results with the host that produced them.
+
+const PATCH_STDERR_TAIL_BYTES = 4 * 1024
+
+async function handlePatchesProgress(env: z.infer<typeof patchesProgress>): Promise<IngestResult> {
+  const install = await prisma.fl_PatchInstall.findUnique({
+    where: { id: env.commandId },
+    select: { id: true, deviceId: true, state: true, rawDetail: true },
+  })
+  if (!install) {
+    throw new Error(`patches.progress: unknown commandId ${env.commandId}`)
+  }
+  const update: Record<string, unknown> = {}
+  if (install.state === "missing" || install.state === "available" || install.state === "queued") {
+    update.state = "installing"
+  }
+
+  // Stash the most recent message in rawDetail for the deploy monitor's
+  // inline status. stderr chunks accumulate (capped) into rawDetail too —
+  // it serves as the patch-side equivalent of stderrTail until we add a
+  // dedicated column.
+  if (env.message) update.rawDetail = env.message
+  if (env.stream === "stderr" && env.data) {
+    const existing = install.rawDetail ?? ""
+    const merged = existing + env.data
+    update.rawDetail =
+      merged.length > PATCH_STDERR_TAIL_BYTES
+        ? merged.slice(merged.length - PATCH_STDERR_TAIL_BYTES)
+        : merged
+  }
+
+  if (Object.keys(update).length > 0) {
+    await prisma.fl_PatchInstall.update({ where: { id: env.commandId }, data: update })
+  }
+  return { method: "patches.progress", deviceId: install.deviceId, commandId: env.commandId }
+}
+
+async function handlePatchesComplete(env: z.infer<typeof patchesComplete>): Promise<IngestResult> {
+  const install = await prisma.fl_PatchInstall.findUnique({
+    where: { id: env.commandId },
+    select: { id: true, deviceId: true, patchId: true, installingDeploymentId: true },
+  })
+  if (!install) {
+    throw new Error(`patches.complete: unknown commandId ${env.commandId}`)
+  }
+
+  // Map agent result → Fl_PatchInstall.state per the schema's documented enum.
+  let nextState: string
+  switch (env.result) {
+    case "installed":
+      nextState = "installed"
+      break
+    case "no-op":
+      nextState = "installed"
+      break
+    case "preflight-failed":
+      nextState = "preflight-failed"
+      break
+    case "rolled-back":
+      nextState = "missing" // rollback puts it back to missing
+      break
+    case "rollback-failed":
+      nextState = "rollback-failed"
+      break
+    case "rollback-partial":
+      nextState = "rollback-failed" // best-effort: dashboard treats partial as failed
+      break
+    case "detection-disagreement":
+      nextState = "detection-disagreement"
+      break
+    case "reboot-required":
+      // Honest "I installed but a reboot is needed". The deploy orchestrator
+      // decides whether to reboot now (rebootPolicy=force) or surface the
+      // pendingReboot flag.
+      nextState = "installed"
+      break
+    case "reboot-deferred":
+      nextState = "installed"
+      break
+    case "failed":
+    default:
+      nextState = "failed"
+      break
+  }
+
+  await prisma.fl_PatchInstall.update({
+    where: { id: env.commandId },
+    data: {
+      state: nextState,
+      lastDetectedAt: new Date(),
+      installedAt: nextState === "installed" ? new Date() : null,
+      failureReason:
+        env.preflightGateFailed
+          ? `preflight-gate:${env.preflightGateFailed}`
+          : env.detectionConsensus === "disagreement"
+            ? "detection-disagreement"
+            : nextState === "failed"
+              ? env.stderrTail ?? `exit ${env.exitCode}`
+              : null,
+      wmiQfe: env.perMethodDetection?.["wmi-qfe"] ?? env.perMethodDetection?.wmiQfe ?? null,
+      dismPackages: env.perMethodDetection?.["dism-packages"] ?? env.perMethodDetection?.dismPackages ?? null,
+      wuHistory: env.perMethodDetection?.["wu-history"] ?? env.perMethodDetection?.wuHistory ?? null,
+      rawDetail: env.stderrTail ?? null,
+    },
+  })
+
+  // Bubble pendingReboot onto the device when the agent reported one.
+  if (env.rebootPending) {
+    await prisma.fl_Device.update({
+      where: { id: install.deviceId },
+      data: { pendingReboot: true, pendingRebootSince: new Date() },
+    })
+  }
+
+  const device = await prisma.fl_Device.findUnique({
+    where: { id: install.deviceId },
+    select: { clientName: true },
+  })
+  await writeAudit({
+    deviceId: install.deviceId,
+    clientName: device?.clientName ?? null,
+    action: nextState === "missing" ? "patch.uninstall.success" : "patch.deployment.target-complete",
+    outcome: nextState === "installed" || nextState === "missing" ? "ok" : "error",
+    detail: {
+      installId: env.commandId,
+      patchId: install.patchId,
+      deploymentId: install.installingDeploymentId,
+      result: env.result,
+      exitCode: env.exitCode,
+      durationMs: env.durationMs,
+      detectionConsensus: env.detectionConsensus ?? null,
+      perMethodDetection: env.perMethodDetection ?? null,
+      rollbackStrategyUsed: env.rollbackStrategyUsed ?? null,
+      preflightGateFailed: env.preflightGateFailed ?? null,
+    },
+  })
+
+  return {
+    method: "patches.complete",
+    deviceId: install.deviceId,
+    commandId: env.commandId,
+    state: nextState,
+  }
+}
+
+// patches.advisory.fire — agent's local Windows Update API saw a KB the
+// catalog hasn't ingested yet. Stored as Fl_Alert(kind=patch.advisory) so
+// /alerts surfaces it; the next CVE/catalog ingest cron will resolve it
+// into a real Fl_Patch row.
+async function handlePatchesAdvisoryFire(env: z.infer<typeof patchesAdvisoryFire>): Promise<IngestResult> {
+  const device = await prisma.fl_Device.findFirst({
+    where: { agentId: env.agentId },
+    select: { id: true, clientName: true },
+  })
+  if (!device) {
+    throw new Error(`patches.advisory.fire: unknown agentId ${env.agentId}`)
+  }
+
+  const alert = await prisma.fl_Alert.create({
+    data: {
+      clientName: device.clientName,
+      deviceId: device.id,
+      kind: "patch.advisory",
+      severity: env.classification === "critical" ? "critical" : "warn",
+      title: `Advisory: ${env.kbId}`,
+      detailJson: JSON.stringify({
+        kbId: env.kbId,
+        publishedAt: env.publishedAt ?? null,
+        classification: env.classification ?? "unknown",
+      }),
+      state: "open",
+    },
+    select: { id: true },
+  })
+  await writeAudit({
+    deviceId: device.id,
+    clientName: device.clientName,
+    action: "patch.advisory.ingest",
+    outcome: "pending",
+    detail: { kbId: env.kbId, classification: env.classification, alertId: alert.id },
+  })
+  return { method: "patches.advisory.fire", deviceId: device.id, alertId: alert.id }
+}
+
+// patches.report — full scan output. Each entry becomes (or updates) a
+// Fl_PatchInstall row with state="missing" tagged for this device. The
+// catalog row (Fl_Patch) is upserted by sourceId so multiple agents
+// reporting the same KB don't create duplicates.
+async function handlePatchesReport(env: z.infer<typeof patchesReport>): Promise<IngestResult> {
+  const device = await prisma.fl_Device.findFirst({
+    where: { agentId: env.agentId },
+    select: { id: true },
+  })
+  if (!device) {
+    throw new Error(`patches.report: unknown agentId ${env.agentId}`)
+  }
+  if (env.error) {
+    return { method: "patches.report", deviceId: device.id, commandId: env.commandId, state: "error" }
+  }
+
+  for (const entry of env.patches ?? []) {
+    // Upsert the catalog row.
+    const patch = await prisma.fl_Patch.upsert({
+      where: { source_sourceId: { source: entry.source, sourceId: entry.sourceId } },
+      create: {
+        source: entry.source,
+        sourceId: entry.sourceId,
+        os: entry.source === "ms" ? "windows" : "linux",
+        title: entry.title ?? entry.sourceId,
+        classification: entry.classification ?? "security",
+      },
+      update: {
+        title: entry.title ?? undefined,
+        classification: entry.classification ?? undefined,
+      },
+    })
+    // Upsert the install row (missing = available but not yet installed).
+    await prisma.fl_PatchInstall.upsert({
+      where: { deviceId_patchId: { deviceId: device.id, patchId: patch.id } },
+      create: {
+        deviceId: device.id,
+        patchId: patch.id,
+        state: "missing",
+        lastDetectedAt: new Date(),
+      },
+      update: {
+        state: "missing",
+        lastDetectedAt: new Date(),
+      },
+    })
+  }
+
+  return {
+    method: "patches.report",
+    deviceId: device.id,
+    commandId: env.commandId,
+    state: "scanned",
+  }
+}
+
 
 
 
