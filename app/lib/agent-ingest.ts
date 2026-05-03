@@ -485,13 +485,16 @@ async function handleScriptsOutput(env: z.infer<typeof scriptsOutput>): Promise<
   const room = Math.max(0, RUN_OUTPUT_CAP_BYTES - existing.length)
   const appended = room > 0 ? existing + env.data.slice(0, room) : existing
 
+  // Conditional queued → running transition (check-and-set) so an
+  // output chunk arriving concurrently with scripts.complete can't undo
+  // a terminal state. Same pattern as software/patch progress handlers.
+  await prisma.fl_ScriptRun.updateMany({
+    where: { id: env.commandId, state: "queued" },
+    data: { state: "running", startedAt: new Date() },
+  })
+
   const update: Record<string, unknown> = {}
   update[env.stream === "stdout" ? "output" : "stderr"] = appended
-  // First chunk transitions queued → running and stamps startedAt.
-  if (run.state === "queued") {
-    update.state = "running"
-    update.startedAt = new Date()
-  }
 
   await prisma.fl_ScriptRun.update({ where: { id: env.commandId }, data: update })
   return { method: "scripts.output", deviceId: run.deviceId, commandId: env.commandId }
@@ -577,13 +580,15 @@ async function handleSoftwareProgress(env: z.infer<typeof softwareProgress>): Pr
     throw new Error(`software.progress: unknown commandId ${env.commandId}`)
   }
 
-  const update: Record<string, unknown> = {}
+  // Conditional state transition (check-and-set) so a progress frame that
+  // arrives concurrently with complete can't clobber the terminal status
+  // — see the same fix in handlePatchesProgress for the why.
+  await prisma.fl_DeploymentTarget.updateMany({
+    where: { id: env.commandId, status: { in: ["pending", "dispatched"] } },
+    data: { status: "running", startedAt: new Date() },
+  })
 
-  // First progress frame transitions dispatched → running and stamps startedAt.
-  if (target.status === "dispatched" || target.status === "pending") {
-    update.status = "running"
-    update.startedAt = new Date()
-  }
+  const update: Record<string, unknown> = {}
   if (env.message) update.progressMessage = env.message
   if (env.percent !== undefined) update.progressPercent = env.percent
 
@@ -702,27 +707,31 @@ async function handlePatchesProgress(env: z.infer<typeof patchesProgress>): Prom
   if (!install) {
     throw new Error(`patches.progress: unknown commandId ${env.commandId}`)
   }
-  const update: Record<string, unknown> = {}
-  if (install.state === "missing" || install.state === "available" || install.state === "queued") {
-    update.state = "installing"
-  }
+
+  // State transition is racy with handlePatchesComplete (gateway fans out
+  // notifications to FleetHub concurrently per WS message). Use a
+  // conditional updateMany so progress NEVER overwrites a terminal state
+  // set by complete that lost the wall-clock race but won the agent-side
+  // emit-order. The where filter is the check-and-set guarantee.
+  await prisma.fl_PatchInstall.updateMany({
+    where: { id: env.commandId, state: { in: ["queued", "missing", "available"] } },
+    data: { state: "installing" },
+  })
 
   // Stash the most recent message in rawDetail for the deploy monitor's
-  // inline status. stderr chunks accumulate (capped) into rawDetail too —
-  // it serves as the patch-side equivalent of stderrTail until we add a
-  // dedicated column.
-  if (env.message) update.rawDetail = env.message
+  // inline status. stderr chunks accumulate (capped) into rawDetail too.
+  const rawUpdate: Record<string, unknown> = {}
+  if (env.message) rawUpdate.rawDetail = env.message
   if (env.stream === "stderr" && env.data) {
     const existing = install.rawDetail ?? ""
     const merged = existing + env.data
-    update.rawDetail =
+    rawUpdate.rawDetail =
       merged.length > PATCH_STDERR_TAIL_BYTES
         ? merged.slice(merged.length - PATCH_STDERR_TAIL_BYTES)
         : merged
   }
-
-  if (Object.keys(update).length > 0) {
-    await prisma.fl_PatchInstall.update({ where: { id: env.commandId }, data: update })
+  if (Object.keys(rawUpdate).length > 0) {
+    await prisma.fl_PatchInstall.update({ where: { id: env.commandId }, data: rawUpdate })
   }
   return { method: "patches.progress", deviceId: install.deviceId, commandId: env.commandId }
 }

@@ -4,6 +4,7 @@ import AppShell from "@/components/AppShell"
 import { prisma } from "@/lib/prisma"
 import { getSessionContext } from "@/lib/authz"
 import PatchApprovalActions from "./PatchApprovalActions"
+import PatchDeployForm from "./PatchDeployForm"
 
 export const dynamic = "force-dynamic"
 
@@ -51,6 +52,17 @@ export default async function PatchDetailPage({
   const stateCounts: Record<string, number> = {}
   for (const i of patch.installs) stateCounts[i.state] = (stateCounts[i.state] ?? 0) + 1
   const missingIds = patch.installs.filter((i) => i.state === "missing").map((i) => i.deviceId)
+  const missingHosts = patch.installs
+    .filter((i) => i.state === "missing")
+    .map((i) => {
+      const d = deviceById[i.deviceId]
+      return {
+        installId: i.id,
+        deviceId: i.deviceId,
+        hostname: d?.hostname ?? "(unknown)",
+        clientName: d?.clientName ?? "—",
+      }
+    })
 
   return (
     <AppShell>
@@ -76,13 +88,8 @@ export default async function PatchDetailPage({
         </header>
 
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          {patch.approvalState === "approved" && missingIds.length > 0 && (
-            <Link
-              href={`/deployments/new?patchId=${patch.id}&targets=${missingIds.slice(0, 200).join(",")}`}
-              style={btnPrimary()}
-            >
-              Deploy to {missingIds.length} missing host{missingIds.length === 1 ? "" : "s"} →
-            </Link>
+          {patch.approvalState === "approved" && missingHosts.length > 0 && (
+            <PatchDeployForm patchId={patch.id} missingHosts={missingHosts} />
           )}
           <PatchApprovalActions
             patchId={patch.id}
