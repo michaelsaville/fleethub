@@ -10,10 +10,12 @@ import { buildSoftwareInventoryReport } from "@/lib/reports/software-inventory"
 import { buildPerformanceTrendReport } from "@/lib/reports/performance-trend"
 import { buildQbrReport } from "@/lib/reports/qbr"
 import { generateQbrNarrative } from "@/lib/ai/qbr-narrative"
+import { buildIdentityPostureReport } from "@/lib/reports/identity-posture"
 import { PatchComplianceReport } from "@/lib/pdf/PatchComplianceReport"
 import { SoftwareInventoryReport } from "@/lib/pdf/SoftwareInventoryReport"
 import { PerformanceTrendReport } from "@/lib/pdf/PerformanceTrendReport"
 import { QbrReport } from "@/lib/pdf/QbrReport"
+import { IdentityPostureReport } from "@/lib/pdf/IdentityPostureReport"
 
 // V1 storage: local disk under REPORTS_DIR (default /tmp/fleethub-reports).
 // PHASE-5-DESIGN §4 calls out S3 streaming for large PDFs — Phase 5.5
@@ -33,6 +35,7 @@ export const SUPPORTED_KINDS: ReportKind[] = [
   "software-inventory",
   "performance-trend",
   "qbr",
+  "identity-posture",
 ]
 
 export async function generateReport(reportId: string): Promise<void> {
@@ -103,6 +106,18 @@ export async function generateReport(reportId: string): Promise<void> {
         : null
       const element = QbrReport({
         data: { ...base, narrative },
+        footerText: tenant?.reportFooterText ?? null,
+        generatedAt: new Date(),
+      })
+      buffer = await renderToBuffer(element)
+    } else if (report.kind === "identity-posture") {
+      const data = await buildIdentityPostureReport({
+        tenantName: report.tenantName,
+        asOf: report.asOf ?? undefined,
+        audience: report.audience as "tech" | "client" | "auditor",
+      })
+      const element = IdentityPostureReport({
+        data,
         footerText: tenant?.reportFooterText ?? null,
         generatedAt: new Date(),
       })

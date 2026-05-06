@@ -24,6 +24,11 @@ const REPORT_KINDS: Array<{ value: string; label: string; help: string }> = [
     label: "Quarterly Business Review",
     help: "Executive rollup: headline metrics, wins, risks, looking ahead. Period defaults to last full calendar quarter.",
   },
+  {
+    value: "identity-posture",
+    label: "Identity Posture",
+    help: "Microsoft 365 / Entra audit pulled from Scout: admins, MFA coverage, Conditional Access, Secure Score. Requires Fl_Tenant.scoutTenantId.",
+  },
 ]
 
 export default function NewReportForm({ tenants }: { tenants: string[] }) {
