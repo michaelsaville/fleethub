@@ -19,6 +19,11 @@ const REPORT_KINDS: Array<{ value: string; label: string; help: string }> = [
     label: "Performance Trend",
     help: "Fleet CPU / RAM / disk over the window plus pressure list and EOL hosts.",
   },
+  {
+    value: "qbr",
+    label: "Quarterly Business Review",
+    help: "Executive rollup: headline metrics, wins, risks, looking ahead. Period defaults to last full calendar quarter.",
+  },
 ]
 
 export default function NewReportForm({ tenants }: { tenants: string[] }) {
