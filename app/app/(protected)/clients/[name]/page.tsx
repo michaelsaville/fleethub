@@ -6,9 +6,11 @@ import SeedBanner from "@/components/SeedBanner"
 import { listAlerts } from "@/lib/alerts"
 import { getClient, getClientActivity } from "@/lib/clients"
 import { listDevices } from "@/lib/devices"
+import { prisma } from "@/lib/prisma"
 import { relativeLastSeen } from "@/lib/devices-time"
 import type { AlertRow } from "@/lib/alerts"
 import type { DeviceRow } from "@/lib/devices"
+import BrandingTab from "./BrandingTab"
 
 export const dynamic = "force-dynamic"
 
@@ -17,6 +19,7 @@ const TABS = [
   { id: "devices",  label: "Devices"  },
   { id: "alerts",   label: "Alerts"   },
   { id: "activity", label: "Activity" },
+  { id: "branding", label: "Branding" },
 ] as const
 type TabId = typeof TABS[number]["id"]
 
@@ -35,10 +38,18 @@ export default async function ClientDetailPage({
   const client = await getClient(name)
   if (!client) notFound()
 
-  const [{ rows: devices }, { rows: alerts }, activity] = await Promise.all([
+  const [{ rows: devices }, { rows: alerts }, activity, tenantBranding] = await Promise.all([
     listDevices({ client: name }),
     listAlerts({ client: name, state: "all" }),
     getClientActivity(name, 40),
+    prisma.fl_Tenant.findUnique({
+      where: { name },
+      select: {
+        reportLogoUrl: true,
+        reportAccentColor: true,
+        reportFooterText: true,
+      },
+    }),
   ])
 
   return (
@@ -56,6 +67,16 @@ export default async function ClientDetailPage({
         {tab === "devices"  && <DevicesTab devices={devices} />}
         {tab === "alerts"   && <AlertsTab alerts={alerts} />}
         {tab === "activity" && <ActivityFeed items={activity} title="Activity" />}
+        {tab === "branding" && (
+          <BrandingTab
+            tenantName={name}
+            initial={{
+              reportLogoUrl: tenantBranding?.reportLogoUrl ?? null,
+              reportAccentColor: tenantBranding?.reportAccentColor ?? "#F97316",
+              reportFooterText: tenantBranding?.reportFooterText ?? null,
+            }}
+          />
+        )}
       </div>
     </AppShell>
   )

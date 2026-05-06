@@ -21,10 +21,14 @@ function shows(section: keyof typeof SECTIONS, audience: string): boolean {
 export function PatchComplianceReport({
   data,
   footerText,
+  logoUrl,
+  accentColor,
   generatedAt,
 }: {
   data: PatchComplianceData
   footerText: string | null
+  logoUrl?: string | null
+  accentColor?: string | null
   generatedAt: Date
 }) {
   const rangeLabel = `as of ${data.asOf.toISOString().slice(0, 10)}`
@@ -39,6 +43,8 @@ export function PatchComplianceReport({
             rangeLabel={rangeLabel}
             audience={data.audience}
             generatedAt={generatedAt}
+            logoUrl={logoUrl}
+            accentColor={accentColor}
           />
         )}
 

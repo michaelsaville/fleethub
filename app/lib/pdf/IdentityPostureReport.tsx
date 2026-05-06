@@ -27,10 +27,14 @@ function shows(section: keyof typeof SECTIONS, audience: string): boolean {
 export function IdentityPostureReport({
   data,
   footerText,
+  logoUrl,
+  accentColor,
   generatedAt,
 }: {
   data: IdentityPostureData
   footerText: string | null
+  logoUrl?: string | null
+  accentColor?: string | null
   generatedAt: Date
 }) {
   const rangeLabel = data.runAt
@@ -48,6 +52,8 @@ export function IdentityPostureReport({
             rangeLabel={rangeLabel}
             audience={data.audience}
             generatedAt={generatedAt}
+            logoUrl={logoUrl}
+            accentColor={accentColor}
           />
           <View style={{ marginTop: 18 }}>
             <Text style={styles.sectionHeader}>Audit unavailable</Text>
@@ -79,6 +85,8 @@ export function IdentityPostureReport({
             rangeLabel={rangeLabel}
             audience={data.audience}
             generatedAt={generatedAt}
+            logoUrl={logoUrl}
+            accentColor={accentColor}
           />
         )}
 

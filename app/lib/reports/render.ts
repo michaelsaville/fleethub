@@ -11,6 +11,7 @@ import { buildPerformanceTrendReport } from "@/lib/reports/performance-trend"
 import { buildQbrReport } from "@/lib/reports/qbr"
 import { generateQbrNarrative } from "@/lib/ai/qbr-narrative"
 import { buildIdentityPostureReport } from "@/lib/reports/identity-posture"
+import { resolveLogoBuffer } from "@/lib/pdf-logo"
 import { PatchComplianceReport } from "@/lib/pdf/PatchComplianceReport"
 import { SoftwareInventoryReport } from "@/lib/pdf/SoftwareInventoryReport"
 import { PerformanceTrendReport } from "@/lib/pdf/PerformanceTrendReport"
@@ -51,8 +52,26 @@ export async function generateReport(reportId: string): Promise<void> {
     // Tenant for branding + QBR narrative opt-in.
     const tenant = await prisma.fl_Tenant.findUnique({
       where: { name: report.tenantName },
-      select: { reportFooterText: true, qbrAutoNarrative: true },
+      select: {
+        reportFooterText: true,
+        reportLogoUrl: true,
+        reportAccentColor: true,
+        qbrAutoNarrative: true,
+      },
     })
+    // Resolve the tenant logo to a data-URI (Buffer → base64) so the
+    // server-side PDF renderer doesn't have to HTTP-fetch its own asset.
+    // External (http://...) logo URLs pass through unchanged.
+    const logoBuffer = await resolveLogoBuffer(tenant?.reportLogoUrl)
+    const logoDataUri = logoBuffer
+      ? `data:${detectImageMime(tenant?.reportLogoUrl ?? "")};base64,${logoBuffer.toString("base64")}`
+      : (tenant?.reportLogoUrl ?? null)
+
+    const branding = {
+      footerText: tenant?.reportFooterText ?? null,
+      logoUrl: logoDataUri,
+      accentColor: tenant?.reportAccentColor ?? null,
+    }
 
     let buffer: Buffer
 
@@ -64,7 +83,7 @@ export async function generateReport(reportId: string): Promise<void> {
       })
       const element = PatchComplianceReport({
         data,
-        footerText: tenant?.reportFooterText ?? null,
+        ...branding,
         generatedAt: new Date(),
       })
       buffer = await renderToBuffer(element)
@@ -76,7 +95,7 @@ export async function generateReport(reportId: string): Promise<void> {
       })
       const element = SoftwareInventoryReport({
         data,
-        footerText: tenant?.reportFooterText ?? null,
+        ...branding,
         generatedAt: new Date(),
       })
       buffer = await renderToBuffer(element)
@@ -90,7 +109,7 @@ export async function generateReport(reportId: string): Promise<void> {
       })
       const element = PerformanceTrendReport({
         data,
-        footerText: tenant?.reportFooterText ?? null,
+        ...branding,
         generatedAt: new Date(),
       })
       buffer = await renderToBuffer(element)
@@ -106,7 +125,7 @@ export async function generateReport(reportId: string): Promise<void> {
         : null
       const element = QbrReport({
         data: { ...base, narrative },
-        footerText: tenant?.reportFooterText ?? null,
+        ...branding,
         generatedAt: new Date(),
       })
       buffer = await renderToBuffer(element)
@@ -118,7 +137,7 @@ export async function generateReport(reportId: string): Promise<void> {
       })
       const element = IdentityPostureReport({
         data,
-        footerText: tenant?.reportFooterText ?? null,
+        ...branding,
         generatedAt: new Date(),
       })
       buffer = await renderToBuffer(element)
@@ -172,4 +191,11 @@ export async function generateReport(reportId: string): Promise<void> {
     })
     throw err
   }
+}
+
+function detectImageMime(url: string): string {
+  const lower = url.toLowerCase()
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg"
+  if (lower.endsWith(".webp")) return "image/webp"
+  return "image/png"
 }

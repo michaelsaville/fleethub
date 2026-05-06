@@ -4,10 +4,14 @@ import type { SoftwareInventoryData } from "@/lib/reports/software-inventory"
 export function SoftwareInventoryReport({
   data,
   footerText,
+  logoUrl,
+  accentColor,
   generatedAt,
 }: {
   data: SoftwareInventoryData
   footerText: string | null
+  logoUrl?: string | null
+  accentColor?: string | null
   generatedAt: Date
 }) {
   return (
@@ -19,6 +23,8 @@ export function SoftwareInventoryReport({
           rangeLabel={`as of ${data.asOf.toISOString().slice(0, 10)}`}
           audience={data.audience}
           generatedAt={generatedAt}
+          logoUrl={logoUrl}
+          accentColor={accentColor}
         />
 
         <Text style={styles.sectionHeader}>Catalog summary</Text>

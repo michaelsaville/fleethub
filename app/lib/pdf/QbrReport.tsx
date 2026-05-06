@@ -23,10 +23,14 @@ function shows(section: keyof typeof SECTIONS, audience: string): boolean {
 export function QbrReport({
   data,
   footerText,
+  logoUrl,
+  accentColor,
   generatedAt,
 }: {
   data: QbrData
   footerText: string | null
+  logoUrl?: string | null
+  accentColor?: string | null
   generatedAt: Date
 }) {
   return (
@@ -40,6 +44,8 @@ export function QbrReport({
             rangeLabel={data.periodLabel}
             audience={data.audience}
             generatedAt={generatedAt}
+            logoUrl={logoUrl}
+            accentColor={accentColor}
           />
         )}
 

@@ -1,4 +1,4 @@
-import { Document, Page, Text, View, StyleSheet } from "@react-pdf/renderer"
+import { Document, Page, Text, View, Image, StyleSheet } from "@react-pdf/renderer"
 
 // Shared report PDF chrome. ASCII-only — Helvetica's bundled glyph set
 // silently corrupts arrows + curly quotes per the @react-pdf memory note.
@@ -16,6 +16,9 @@ export const COLOR = {
   kev: "#7F1D1D",
 }
 
+/** Default tenant accent — same hex as Fl_Tenant.reportAccentColor default. */
+export const DEFAULT_ACCENT = "#F97316"
+
 export const styles = StyleSheet.create({
   page: {
     backgroundColor: "#FFFFFF",
@@ -29,8 +32,10 @@ export const styles = StyleSheet.create({
   },
   // Cover
   coverWrap: { paddingTop: 80 },
+  coverLogo: { maxHeight: 50, maxWidth: 200, marginBottom: 24, objectFit: "contain" },
   coverTitle: { fontSize: 28, fontWeight: 700, marginBottom: 6 },
   coverKind: { fontSize: 11, color: COLOR.muted, textTransform: "uppercase", letterSpacing: 1.4, marginBottom: 24 },
+  coverAccentRule: { width: 60, height: 2, marginTop: 4, marginBottom: 18 },
   coverMeta: { fontSize: 10, color: COLOR.muted, marginBottom: 4 },
   // Section
   sectionHeader: {
@@ -107,17 +112,31 @@ export function Cover({
   rangeLabel,
   audience,
   generatedAt,
+  logoUrl,
+  accentColor,
 }: {
   kind: string
   tenantName: string
   rangeLabel: string
   audience: string
   generatedAt: Date
+  /** Absolute or app-relative URL to the tenant logo. Renders above the
+   *  kind label when set. PNG/JPEG/WebP supported; max-height ~50pt so
+   *  it doesn't dominate the cover. */
+  logoUrl?: string | null
+  /** Per-tenant accent. Tints the kind label + the divider rule under
+   *  the title. Falls back to DEFAULT_ACCENT when null. */
+  accentColor?: string | null
 }) {
+  const accent = accentColor || DEFAULT_ACCENT
   return (
     <View style={styles.coverWrap}>
-      <Text style={styles.coverKind}>{kind}</Text>
+      {logoUrl && (
+        <Image src={logoUrl} style={styles.coverLogo} />
+      )}
+      <Text style={[styles.coverKind, { color: accent }]}>{kind}</Text>
       <Text style={styles.coverTitle}>{tenantName}</Text>
+      <View style={[styles.coverAccentRule, { backgroundColor: accent }]} />
       <Text style={styles.coverMeta}>{rangeLabel}</Text>
       <Text style={styles.coverMeta}>Audience: {audience}</Text>
       <Text style={styles.coverMeta}>
@@ -127,4 +146,4 @@ export function Cover({
   )
 }
 
-export { Document, Page, Text, View }
+export { Document, Page, Text, View, Image }

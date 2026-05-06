@@ -9,10 +9,14 @@ import type { PerformanceTrendData } from "@/lib/reports/performance-trend"
 export function PerformanceTrendReport({
   data,
   footerText,
+  logoUrl,
+  accentColor,
   generatedAt,
 }: {
   data: PerformanceTrendData
   footerText: string | null
+  logoUrl?: string | null
+  accentColor?: string | null
   generatedAt: Date
 }) {
   const rangeLabel = `${data.startDate.toISOString().slice(0, 10)} -> ${data.endDate.toISOString().slice(0, 10)}`
@@ -26,6 +30,8 @@ export function PerformanceTrendReport({
           rangeLabel={rangeLabel}
           audience={data.audience}
           generatedAt={generatedAt}
+          logoUrl={logoUrl}
+          accentColor={accentColor}
         />
 
         <Text style={styles.sectionHeader}>Fleet health</Text>
