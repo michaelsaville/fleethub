@@ -666,3 +666,41 @@ model Fl_PerformanceSample {
   @@map("fl_performance_samples")
   @@schema("fleethub")
 }
+
+/// Cron'd report generation + delivery. Per PHASE-5-DESIGN §5.
+/// One row per (tenant, kind, cadence) trio; the cron worker fans these
+/// out into Fl_Report rows on each fire. delivery JSON carries email
+/// recipients + (Phase 5.5) Slack/Teams webhook config.
+model Fl_ReportSchedule {
+  id            String    @id @default(cuid())
+  tenantName    String
+  /// Matches Fl_Report.kind: "patch-compliance" | "software-inventory"
+  /// | "performance-trend" | "qbr" | "identity-posture"
+  kind          String
+  audience      String    @default("client")
+  format        String    @default("pdf")
+  /// Cron expression interpreted in `timezone`.
+  cron          String
+  timezone      String    @default("UTC")
+  /// Date-range relative to scheduled fire time. See §5:
+  /// "last-7d" | "last-30d" | "last-90d" | "month-to-date" | "quarter-to-date"
+  dateRange     String    @default("last-30d")
+  /// JSON: { email?: { to: string[], cc?: string[] }, slack?: { webhookUrl: string } }
+  /// v1 only honors email.* (Phase 5.5 adds slack delivery).
+  deliveryJson  String
+  isActive      Boolean   @default(true)
+  /// Last successful fire — used to detect skew and to gate the next fire.
+  lastFiredAt   DateTime?
+  /// Last failure surface so the operator can see why a schedule stopped
+  /// firing without trawling logs.
+  lastErrorAt   DateTime?
+  lastError     String?
+  createdBy     String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([tenantName, isActive])
+  @@index([isActive, lastFiredAt])
+  @@map("fl_report_schedules")
+  @@schema("fleethub")
+}

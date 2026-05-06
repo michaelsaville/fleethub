@@ -92,24 +92,27 @@ export default async function ReportsPage() {
 function ExportButtons() {
   return (
     <div style={{ display: "flex", gap: "8px" }}>
-      <button
-        type="button"
-        disabled
-        title="PDF export ships in Phase 5"
-        style={btnStyle(false)}
-      >
-        Export PDF
-      </button>
-      <button
-        type="button"
-        disabled
-        title="Scheduled export ships in Phase 5"
-        style={btnStyle(false)}
-      >
-        Schedule…
-      </button>
+      <Link href="/reports/new" style={btnLinkStyle(true)}>
+        Generate report
+      </Link>
+      <Link href="/reports/scheduled" style={btnLinkStyle(false)}>
+        Scheduled
+      </Link>
     </div>
   )
+}
+
+function btnLinkStyle(active: boolean): React.CSSProperties {
+  return {
+    fontSize: "12px",
+    fontWeight: 500,
+    padding: "6px 12px",
+    borderRadius: "6px",
+    border: "0.5px solid " + (active ? "var(--color-accent)" : "var(--color-border-tertiary)"),
+    background: active ? "var(--color-accent)" : "transparent",
+    color: active ? "#fff" : "var(--color-text-primary)",
+    textDecoration: "none",
+  }
 }
 
 function btnStyle(active: boolean): React.CSSProperties {
