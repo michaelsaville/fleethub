@@ -3,6 +3,7 @@ import { CronExpressionParser } from "cron-parser"
 import { prisma } from "@/lib/prisma"
 import { requireSession } from "@/lib/authz"
 import { SUPPORTED_KINDS, type ReportKind } from "@/lib/reports/render"
+import { isValidWebhookUrl } from "@/lib/webhook-delivery"
 
 // CRUD over Fl_ReportSchedule. v1 = list + create + delete (delete via
 // the [id] route below). Edit deferred — operators can delete and
@@ -36,6 +37,8 @@ export async function POST(req: NextRequest) {
     dateRange?: string
     emailTo?: string
     emailCc?: string
+    slackWebhookUrl?: string
+    teamsWebhookUrl?: string
   }
 
   if (!body.tenantName?.trim()) {
@@ -77,17 +80,42 @@ export async function POST(req: NextRequest) {
     .split(/[,;\s]+/)
     .map((s) => s.trim())
     .filter(Boolean)
-  if (emailTo.length === 0) {
-    return NextResponse.json(
-      { error: "At least one email recipient required (emailTo)" },
-      { status: 400 },
-    )
-  }
   for (const addr of [...emailTo, ...emailCc]) {
     if (!addr.includes("@")) {
       return NextResponse.json({ error: `invalid email address: ${addr}` }, { status: 400 })
     }
   }
+
+  const slackUrl = body.slackWebhookUrl?.trim() || ""
+  const teamsUrl = body.teamsWebhookUrl?.trim() || ""
+  if (slackUrl && !isValidWebhookUrl(slackUrl, "slack")) {
+    return NextResponse.json(
+      { error: "slackWebhookUrl must be an https Slack incoming webhook (hooks.slack.com)" },
+      { status: 400 },
+    )
+  }
+  if (teamsUrl && !isValidWebhookUrl(teamsUrl, "teams")) {
+    return NextResponse.json(
+      { error: "teamsWebhookUrl must be an https Teams incoming webhook (*.webhook.office.com)" },
+      { status: 400 },
+    )
+  }
+  if (emailTo.length === 0 && !slackUrl && !teamsUrl) {
+    return NextResponse.json(
+      { error: "At least one delivery channel required (email, Slack, or Teams)" },
+      { status: 400 },
+    )
+  }
+
+  const deliveryConfig: Record<string, unknown> = {}
+  if (emailTo.length > 0) {
+    deliveryConfig.email = {
+      to: emailTo,
+      ...(emailCc.length > 0 ? { cc: emailCc } : {}),
+    }
+  }
+  if (slackUrl) deliveryConfig.slack = { webhookUrl: slackUrl }
+  if (teamsUrl) deliveryConfig.teams = { webhookUrl: teamsUrl }
 
   const schedule = await prisma.fl_ReportSchedule.create({
     data: {
@@ -97,9 +125,7 @@ export async function POST(req: NextRequest) {
       cron: body.cron,
       timezone: body.timezone || "UTC",
       dateRange,
-      deliveryJson: JSON.stringify({
-        email: { to: emailTo, ...(emailCc.length > 0 ? { cc: emailCc } : {}) },
-      }),
+      deliveryJson: JSON.stringify(deliveryConfig),
       createdBy: session.email,
       isActive: true,
     },

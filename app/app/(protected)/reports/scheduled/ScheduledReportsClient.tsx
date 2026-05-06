@@ -59,6 +59,8 @@ export default function ScheduledReportsClient({
   const [dateRange, setDateRange] = useState<(typeof DATE_RANGE_OPTIONS)[number]>("last-30d")
   const [emailTo, setEmailTo] = useState("")
   const [emailCc, setEmailCc] = useState("")
+  const [slackWebhookUrl, setSlackWebhookUrl] = useState("")
+  const [teamsWebhookUrl, setTeamsWebhookUrl] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -71,7 +73,8 @@ export default function ScheduledReportsClient({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          tenantName, kind, audience, cron, timezone, dateRange, emailTo, emailCc,
+          tenantName, kind, audience, cron, timezone, dateRange,
+          emailTo, emailCc, slackWebhookUrl, teamsWebhookUrl,
         }),
       })
       const j = await res.json()
@@ -82,6 +85,8 @@ export default function ScheduledReportsClient({
       setCreating(false)
       setEmailTo("")
       setEmailCc("")
+      setSlackWebhookUrl("")
+      setTeamsWebhookUrl("")
       router.refresh()
     } finally {
       setSubmitting(false)
@@ -184,7 +189,7 @@ export default function ScheduledReportsClient({
             <input
               value={emailTo}
               onChange={(e) => setEmailTo(e.target.value)}
-              placeholder="alice@example.com, bob@example.com"
+              placeholder="alice@example.com, bob@example.com (optional)"
               style={inputStyle}
             />
           </Field>
@@ -196,6 +201,27 @@ export default function ScheduledReportsClient({
               style={inputStyle}
             />
           </Field>
+
+          <Field label="Slack incoming webhook URL">
+            <input
+              value={slackWebhookUrl}
+              onChange={(e) => setSlackWebhookUrl(e.target.value)}
+              placeholder="https://hooks.slack.com/services/... (optional)"
+              style={inputStyle}
+            />
+          </Field>
+          <Field label="Teams incoming webhook URL">
+            <input
+              value={teamsWebhookUrl}
+              onChange={(e) => setTeamsWebhookUrl(e.target.value)}
+              placeholder="https://<tenant>.webhook.office.com/... (optional)"
+              style={inputStyle}
+            />
+          </Field>
+          <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: -4 }}>
+            At least one channel (email, Slack, or Teams) is required. Slack/Teams posts include a
+            first-page thumbnail of the report fetched from this server&apos;s public URL.
+          </div>
 
           {error && <div style={errorStyle}>{error}</div>}
 
@@ -233,6 +259,10 @@ export default function ScheduledReportsClient({
               {initialSchedules.map((s) => {
                 const delivery = parseDelivery(s.deliveryJson)
                 const recipients = delivery.email?.to ?? []
+                const channels: string[] = []
+                if (recipients.length > 0) channels.push(`email (${recipients.length})`)
+                if (delivery.slack?.webhookUrl) channels.push("slack")
+                if (delivery.teams?.webhookUrl) channels.push("teams")
                 return (
                   <tr key={s.id} style={{ borderTop: "0.5px solid var(--color-border-tertiary)" }}>
                     <td style={tdStyle}>{s.tenantName}</td>
@@ -244,7 +274,18 @@ export default function ScheduledReportsClient({
                       {s.cron} <span style={{ color: "var(--color-text-muted)" }}>{s.timezone}</span>
                     </td>
                     <td style={tdStyle}>{s.dateRange}</td>
-                    <td style={tdStyle}>{recipients.join(", ") || <span style={{ color: "var(--color-text-muted)" }}>none</span>}</td>
+                    <td style={tdStyle}>
+                      {channels.length === 0 ? (
+                        <span style={{ color: "var(--color-text-muted)" }}>none</span>
+                      ) : (
+                        channels.join(" + ")
+                      )}
+                      {recipients.length > 0 && (
+                        <div style={{ fontSize: 10.5, color: "var(--color-text-muted)", marginTop: 2 }}>
+                          {recipients.join(", ")}
+                        </div>
+                      )}
+                    </td>
                     <td style={tdStyle}>
                       {s.lastFiredAt ? new Date(s.lastFiredAt).toLocaleString() : <span style={{ color: "var(--color-text-muted)" }}>never</span>}
                       {s.lastError && (
@@ -288,7 +329,11 @@ export default function ScheduledReportsClient({
   )
 }
 
-function parseDelivery(json: string): { email?: { to: string[]; cc?: string[] } } {
+function parseDelivery(json: string): {
+  email?: { to: string[]; cc?: string[] }
+  slack?: { webhookUrl: string }
+  teams?: { webhookUrl: string }
+} {
   try { return JSON.parse(json) } catch { return {} }
 }
 

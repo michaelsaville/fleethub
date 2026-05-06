@@ -16,7 +16,9 @@ RUN npx prisma generate
 RUN npm run build
 
 FROM base AS runner
-RUN apk add --no-cache openssl
+# poppler-utils provides pdftoppm — used by lib/pdf-thumbnail.ts to render
+# the first page of a generated report PDF to PNG for Slack/Teams previews.
+RUN apk add --no-cache openssl poppler-utils
 WORKDIR /app
 ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs

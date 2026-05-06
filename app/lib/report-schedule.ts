@@ -6,6 +6,11 @@ import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { generateReport, REPORTS_DIR } from "@/lib/reports/render"
 import { sendReportEmail, m365Configured } from "@/lib/m365-mail"
+import {
+  deliverToSlack,
+  deliverToTeams,
+  type WebhookContext,
+} from "@/lib/webhook-delivery"
 
 // PHASE-5-DESIGN §5: Fl_ReportSchedule cron worker.
 //
@@ -20,7 +25,11 @@ import { sendReportEmail, m365Configured } from "@/lib/m365-mail"
 // Resolved at fire time, NOT at schedule-create time, so the next fire
 // always picks up a fresh window.
 //
-// Delivery v1 = email only. Slack/Teams thumbnail is Phase 5.5 step #8.
+// Delivery (Phase 5 step 8): email + Slack + Teams. Per-channel outcomes
+// are independent; the report row is marked `delivered` if at least one
+// configured channel succeeded, `failed` only if all attempted channels
+// failed. A schedule with no configured channels lands in `ready-but-no-
+// delivery` (PDF generated and saved on disk).
 //
 // Failure handling: a generation or delivery failure writes
 // Fl_ReportSchedule.lastError + lastErrorAt but DOES bump lastFiredAt
@@ -35,8 +44,8 @@ export type DateRangeToken =
 
 export interface DeliveryConfig {
   email?: { to: string[]; cc?: string[] }
-  /** Phase 5.5. v1 ignores this field. */
   slack?: { webhookUrl: string }
+  teams?: { webhookUrl: string }
 }
 
 export function resolveDateRange(
@@ -148,34 +157,82 @@ export async function fireSchedule(
     return { scheduleId: schedule.id, reportId: report.id, state: "failed", error: `generate: ${msg}` }
   }
 
-  // 5. Deliver via email (v1 only).
+  // 5. Deliver via every configured channel.
   let delivery: DeliveryConfig
   try {
     delivery = JSON.parse(schedule.deliveryJson)
   } catch {
     return { scheduleId: schedule.id, reportId: report.id, state: "failed", error: "deliveryJson is not valid JSON" }
   }
-  if (!delivery.email?.to?.length) {
-    // No email configured — leave the row in state=ready and don't bump deliveredAt.
+
+  const hasEmail = (delivery.email?.to?.length ?? 0) > 0
+  const hasSlack = !!delivery.slack?.webhookUrl
+  const hasTeams = !!delivery.teams?.webhookUrl
+  if (!hasEmail && !hasSlack && !hasTeams) {
     return { scheduleId: schedule.id, reportId: report.id, state: "ready-but-no-delivery" }
   }
 
-  try {
-    if (!m365Configured()) {
-      throw new Error("M365 not configured (set AZURE_AD_* + M365_SENDER_UPN in fleethub/.env)")
+  const channels: ChannelOutcome[] = []
+  const webhookCtx: WebhookContext = {
+    reportId: report.id,
+    kind: schedule.kind,
+    kindLabel: labelFor(schedule.kind),
+    tenantName: schedule.tenantName,
+    audience: schedule.audience,
+    startDate,
+    endDate,
+  }
+
+  // Email — large payload (PDF attached); run sequentially so a 30s send
+  // doesn't compete for a TLS handshake with two webhook posts.
+  if (hasEmail) {
+    try {
+      if (!m365Configured()) {
+        throw new Error("M365 not configured (set AZURE_AD_* + M365_SENDER_UPN in fleethub/.env)")
+      }
+      const filepath = path.join(REPORTS_DIR, `${report.id}.pdf`)
+      const pdfBytes = await fs.readFile(filepath)
+      const filename = filenameFor(schedule.kind, schedule.tenantName, fireTime)
+      const subject = subjectFor(schedule.kind, schedule.tenantName, startDate, endDate)
+      await sendReportEmail({
+        to: delivery.email!.to,
+        cc: delivery.email!.cc,
+        subject,
+        htmlBody: bodyFor(schedule.kind, schedule.tenantName, startDate, endDate, schedule.audience),
+        pdfBytes,
+        pdfFilename: filename,
+      })
+      channels.push({ channel: "email", ok: true })
+    } catch (err) {
+      channels.push({ channel: "email", ok: false, error: errMessage(err) })
     }
-    const filepath = path.join(REPORTS_DIR, `${report.id}.pdf`)
-    const pdfBytes = await fs.readFile(filepath)
-    const filename = filenameFor(schedule.kind, schedule.tenantName, fireTime)
-    const subject = subjectFor(schedule.kind, schedule.tenantName, startDate, endDate)
-    await sendReportEmail({
-      to: delivery.email.to,
-      cc: delivery.email.cc,
-      subject,
-      htmlBody: bodyFor(schedule.kind, schedule.tenantName, startDate, endDate, schedule.audience),
-      pdfBytes,
-      pdfFilename: filename,
-    })
+  }
+
+  // Slack + Teams in parallel — both are small JSON POSTs and independent.
+  const webhookJobs: Array<Promise<ChannelOutcome>> = []
+  if (hasSlack) {
+    webhookJobs.push(
+      deliverToSlack(delivery.slack!.webhookUrl, webhookCtx)
+        .then(() => ({ channel: "slack", ok: true } as const))
+        .catch((err) => ({ channel: "slack", ok: false, error: errMessage(err) } as const)),
+    )
+  }
+  if (hasTeams) {
+    webhookJobs.push(
+      deliverToTeams(delivery.teams!.webhookUrl, webhookCtx)
+        .then(() => ({ channel: "teams", ok: true } as const))
+        .catch((err) => ({ channel: "teams", ok: false, error: errMessage(err) } as const)),
+    )
+  }
+  if (webhookJobs.length > 0) {
+    const settled = await Promise.all(webhookJobs)
+    channels.push(...settled)
+  }
+
+  const anyOk = channels.some((c) => c.ok)
+  const allFailed = channels.length > 0 && !anyOk
+
+  if (anyOk) {
     await prisma.fl_Report.update({
       where: { id: report.id },
       data: { state: "delivered", deliveredAt: new Date() },
@@ -184,14 +241,49 @@ export async function fireSchedule(
       actorEmail: schedule.createdBy,
       clientName: schedule.tenantName,
       action: "report.delivered",
-      outcome: "ok",
-      detail: { reportId: report.id, scheduleId: schedule.id, recipients: delivery.email.to.length },
+      // anyOk path: "ok" if every configured channel succeeded; "error" if at
+      // least one failed (partial). The detail.channels array carries the
+      // per-channel breakdown so an audit reader can see exactly which path
+      // failed without us inventing a custom enum value.
+      outcome: channels.every((c) => c.ok) ? "ok" : "error",
+      detail: {
+        reportId: report.id,
+        scheduleId: schedule.id,
+        channels: channels.map((c) => ({ channel: c.channel, ok: c.ok, error: c.error })),
+        recipients: delivery.email?.to?.length ?? 0,
+      },
     })
-    return { scheduleId: schedule.id, reportId: report.id, state: "delivered" }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return { scheduleId: schedule.id, reportId: report.id, state: "failed", error: `deliver: ${msg}` }
   }
+
+  if (allFailed) {
+    return {
+      scheduleId: schedule.id,
+      reportId: report.id,
+      state: "failed",
+      error: "deliver: " + channels.map((c) => `${c.channel}: ${c.error}`).join("; "),
+    }
+  }
+  // Mixed — bubble up partial errors so the operator can see them in lastError.
+  const partials = channels.filter((c) => !c.ok)
+  return {
+    scheduleId: schedule.id,
+    reportId: report.id,
+    state: "delivered",
+    error:
+      partials.length > 0
+        ? "partial: " + partials.map((c) => `${c.channel}: ${c.error}`).join("; ")
+        : undefined,
+  }
+}
+
+interface ChannelOutcome {
+  channel: "email" | "slack" | "teams"
+  ok: boolean
+  error?: string
+}
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }
 
 /** Process every due schedule. Idempotent — bumps lastFiredAt regardless of
@@ -206,6 +298,10 @@ export async function fireDueSchedules(now = new Date()): Promise<{
     const result = await fireSchedule(schedule, fireTime)
     results.push(result)
     // Bump lastFiredAt unconditionally — failure path still records "we tried".
+    // A "delivered" result with a set `error` field is a partial: at least
+    // one channel succeeded (so don't mark the schedule failed) but at
+    // least one channel failed too — preserve the message in lastError so
+    // operators can see it without tailing logs.
     if (result.state === "failed") {
       await prisma.fl_ReportSchedule.update({
         where: { id: schedule.id },
@@ -213,6 +309,15 @@ export async function fireDueSchedules(now = new Date()): Promise<{
           lastFiredAt: fireTime,
           lastErrorAt: new Date(),
           lastError: (result.error ?? "unknown").slice(0, 500),
+        },
+      })
+    } else if (result.error) {
+      await prisma.fl_ReportSchedule.update({
+        where: { id: schedule.id },
+        data: {
+          lastFiredAt: fireTime,
+          lastErrorAt: new Date(),
+          lastError: result.error.slice(0, 500),
         },
       })
     } else {
