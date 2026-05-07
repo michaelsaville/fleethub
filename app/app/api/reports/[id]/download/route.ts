@@ -35,7 +35,13 @@ export async function GET(
     )
   }
 
-  const filepath = path.join(REPORTS_DIR, `${report.id}.pdf`)
+  const ext = report.format === "evidence-zip" ? "zip" : "pdf"
+  const contentType = ext === "zip" ? "application/zip" : "application/pdf"
+  // ZIP downloads default to attachment so the browser doesn't try to render
+  // the binary inline; PDFs stay inline so the viewer pops open.
+  const disposition = ext === "zip" ? "attachment" : "inline"
+
+  const filepath = path.join(REPORTS_DIR, `${report.id}.${ext}`)
   let buffer: Buffer
   try {
     buffer = await fs.readFile(filepath)
@@ -46,12 +52,12 @@ export async function GET(
     )
   }
 
-  const filename = `${report.kind}-${report.tenantName.replace(/\s+/g, "-")}-${report.id.slice(-6)}.pdf`
+  const filename = `${report.kind}-${report.tenantName.replace(/\s+/g, "-")}-${report.id.slice(-6)}.${ext}`
   return new NextResponse(new Uint8Array(buffer), {
     status: 200,
     headers: {
-      "content-type": "application/pdf",
-      "content-disposition": `inline; filename="${filename}"`,
+      "content-type": contentType,
+      "content-disposition": `${disposition}; filename="${filename}"`,
       "content-length": String(buffer.length),
     },
   })

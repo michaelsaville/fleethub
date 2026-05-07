@@ -17,6 +17,9 @@ import { SoftwareInventoryReport } from "@/lib/pdf/SoftwareInventoryReport"
 import { PerformanceTrendReport } from "@/lib/pdf/PerformanceTrendReport"
 import { QbrReport } from "@/lib/pdf/QbrReport"
 import { IdentityPostureReport } from "@/lib/pdf/IdentityPostureReport"
+import { buildEvidenceZip } from "@/lib/reports/evidence-zip"
+
+const FLEETHUB_VERSION = "5.1.0"
 
 // V1 storage: local disk under REPORTS_DIR (default /tmp/fleethub-reports).
 // PHASE-5-DESIGN §4 calls out S3 streaming for large PDFs — Phase 5.5
@@ -145,12 +148,41 @@ export async function generateReport(reportId: string): Promise<void> {
       throw new Error(`report kind not implemented: ${report.kind}`)
     }
 
-    // Persist to disk.
+    // Persist to disk. Evidence-zip wraps the rendered PDF + CSVs +
+    // audit-chain proof + manifest + README into a single .zip; PDF
+    // format saves the buffer directly.
     await fs.mkdir(REPORTS_DIR, { recursive: true })
-    const filename = `${report.id}.pdf`
+
+    let artifactBuffer: Buffer
+    let artifactExt: string
+
+    if (report.format === "evidence-zip") {
+      const zip = await buildEvidenceZip({
+        reportId: report.id,
+        kind: report.kind as ReportKind,
+        tenantName: report.tenantName,
+        audience: report.audience as "tech" | "client" | "auditor",
+        // For point-in-time kinds (patch-compliance, identity-posture) the
+        // span is asOf±0; for ranged kinds we use start/end. Either way we
+        // need both ends for the manifest.
+        startDate: report.startDate ?? report.asOf ?? new Date(),
+        endDate: report.endDate ?? report.asOf ?? new Date(),
+        pdfBytes: buffer,
+        generatedAt: new Date(),
+        generatedBy: report.generatedBy ?? null,
+        fleethubVersion: FLEETHUB_VERSION,
+      })
+      artifactBuffer = zip.zipBytes
+      artifactExt = "zip"
+    } else {
+      artifactBuffer = buffer
+      artifactExt = "pdf"
+    }
+
+    const filename = `${report.id}.${artifactExt}`
     const filepath = path.join(REPORTS_DIR, filename)
-    await fs.writeFile(filepath, buffer)
-    const sha256 = crypto.createHash("sha256").update(buffer).digest("hex")
+    await fs.writeFile(filepath, artifactBuffer)
+    const sha256 = crypto.createHash("sha256").update(artifactBuffer).digest("hex")
 
     await prisma.fl_Report.update({
       where: { id: reportId },
@@ -158,7 +190,7 @@ export async function generateReport(reportId: string): Promise<void> {
         state: "ready",
         artifactUrl: `/api/reports/${report.id}/download`,
         artifactSha256: sha256,
-        artifactBytes: buffer.length,
+        artifactBytes: artifactBuffer.length,
         generatedAt: new Date(),
       },
     })
@@ -172,7 +204,8 @@ export async function generateReport(reportId: string): Promise<void> {
         reportId: report.id,
         kind: report.kind,
         audience: report.audience,
-        bytes: buffer.length,
+        format: report.format,
+        bytes: artifactBuffer.length,
         sha256,
       },
     })

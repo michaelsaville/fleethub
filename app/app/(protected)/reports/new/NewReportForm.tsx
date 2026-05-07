@@ -36,6 +36,7 @@ export default function NewReportForm({ tenants }: { tenants: string[] }) {
   const [kind, setKind] = useState("patch-compliance")
   const [tenantName, setTenantName] = useState(tenants[0] ?? "")
   const [audience, setAudience] = useState<"client" | "tech" | "auditor">("client")
+  const [format, setFormat] = useState<"pdf" | "evidence-zip">("pdf")
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -51,7 +52,7 @@ export default function NewReportForm({ tenants }: { tenants: string[] }) {
       const create = await fetch("/api/reports", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind, tenantName, audience }),
+        body: JSON.stringify({ kind, tenantName, audience, format }),
       })
       const created = await create.json()
       if (!create.ok) {
@@ -131,6 +132,17 @@ export default function NewReportForm({ tenants }: { tenants: string[] }) {
           <option value="client">Client (executive summary)</option>
           <option value="tech">Tech (full detail)</option>
           <option value="auditor">Auditor (every row, every host)</option>
+        </select>
+      </Field>
+
+      <Field label="Format">
+        <select
+          value={format}
+          onChange={(e) => setFormat(e.target.value as "pdf" | "evidence-zip")}
+          style={inputStyle}
+        >
+          <option value="pdf">PDF only</option>
+          <option value="evidence-zip">Evidence ZIP (PDF + CSVs + audit-chain proof + manifest)</option>
         </select>
       </Field>
 

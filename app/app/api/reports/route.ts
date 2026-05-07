@@ -48,6 +48,10 @@ export async function POST(req: NextRequest) {
   if (!["tech", "client", "auditor"].includes(audience)) {
     return NextResponse.json({ error: "audience must be tech | client | auditor" }, { status: 400 })
   }
+  const format = (body.format ?? "pdf").toLowerCase()
+  if (!["pdf", "evidence-zip"].includes(format)) {
+    return NextResponse.json({ error: "format must be pdf | evidence-zip" }, { status: 400 })
+  }
 
   // Per-tenant retention default.
   const tenant = await prisma.fl_Tenant.findUnique({
@@ -65,7 +69,7 @@ export async function POST(req: NextRequest) {
       asOf: body.asOf ? new Date(body.asOf) : null,
       startDate: body.startDate ? new Date(body.startDate) : null,
       endDate: body.endDate ? new Date(body.endDate) : null,
-      format: body.format ?? "pdf",
+      format,
       generatedBy: session.email,
       retentionUntil,
       state: "queued",

@@ -40,6 +40,14 @@ export async function GET(
       { status: 409 },
     )
   }
+  if (report.format !== "pdf") {
+    // Thumbnails only make sense for PDFs. Evidence ZIPs are bundles —
+    // refuse instead of trying to render a ZIP first page.
+    return NextResponse.json(
+      { error: `thumbnails not available for format=${report.format}` },
+      { status: 409 },
+    )
+  }
 
   const pdfPath = path.join(REPORTS_DIR, `${report.id}.pdf`)
   const thumbPath = path.join(REPORTS_DIR, `${report.id}-thumb.png`)
