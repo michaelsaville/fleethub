@@ -22,15 +22,33 @@ export default async function ClientsPage() {
   return (
     <AppShell openAlertsCount={totals.open}>
       <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-        <header>
-          <h1 style={{ fontSize: "20px", fontWeight: 600, margin: 0, marginBottom: "4px", letterSpacing: "-0.01em" }}>
-            Clients
-          </h1>
-          <p style={{ color: "var(--color-text-secondary)", fontSize: "13px", margin: 0 }}>
-            Fleet rollup per managed client. Each card links into a
-            client-scoped view of devices, alerts, and activity.
-            Asset documentation lives in DocHub.
-          </p>
+        <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "16px" }}>
+          <div>
+            <h1 style={{ fontSize: "20px", fontWeight: 600, margin: 0, marginBottom: "4px", letterSpacing: "-0.01em" }}>
+              Clients
+            </h1>
+            <p style={{ color: "var(--color-text-secondary)", fontSize: "13px", margin: 0 }}>
+              Fleet rollup per managed client. Each card links into a
+              client-scoped view of devices, alerts, and activity.
+              Asset documentation lives in DocHub.
+            </p>
+          </div>
+          <Link
+            href="/clients/new"
+            style={{
+              flexShrink: 0,
+              padding: "8px 14px",
+              background: "var(--color-accent, #F97316)",
+              color: "#fff",
+              fontSize: "13px",
+              fontWeight: 600,
+              borderRadius: "8px",
+              textDecoration: "none",
+              whiteSpace: "nowrap",
+            }}
+          >
+            + New client
+          </Link>
         </header>
 
         {isMock && <SeedBanner kind="fleet" />}
@@ -59,11 +77,12 @@ export default async function ClientsPage() {
               fontSize: "13px",
             }}
           >
-            No clients yet. Once an agent enrolls (see{" "}
+            No clients yet. Use <strong>+ New client</strong> above to pre-create one,
+            or wait for the first agent to enroll (see{" "}
             <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "12px" }}>
               docs/AGENT-PROTOCOL.md
             </code>
-            ) the client will appear here.
+            ).
           </div>
         ) : (
           <section
@@ -143,11 +162,30 @@ function ClientCard({ client }: { client: ClientRow }) {
             {client.name}
           </div>
           <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginTop: "2px" }}>
-            {client.deviceCount} device{client.deviceCount === 1 ? "" : "s"}
-            {client.newestActivity && ` · last seen ${relativeLastSeen(client.newestActivity)}`}
+            {client.pending
+              ? "Awaiting first agent enrollment"
+              : <>
+                  {client.deviceCount} device{client.deviceCount === 1 ? "" : "s"}
+                  {client.newestActivity && ` · last seen ${relativeLastSeen(client.newestActivity)}`}
+                </>}
           </div>
         </div>
-        {hasAlerts && (
+        {client.pending ? (
+          <span
+            style={{
+              padding: "2px 8px",
+              borderRadius: "999px",
+              fontSize: "10px",
+              fontWeight: 600,
+              background: "var(--color-background-tertiary, rgba(148, 163, 184, 0.18))",
+              color: "var(--color-text-muted)",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+            }}
+          >
+            Pending
+          </span>
+        ) : hasAlerts && (
           <span
             style={{
               padding: "2px 8px",
@@ -165,22 +203,33 @@ function ClientCard({ client }: { client: ClientRow }) {
         )}
       </div>
 
-      <div>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10.5px", color: "var(--color-text-muted)", marginBottom: "4px" }}>
-          <span>Online</span>
-          <span style={{ color: onlineTone, fontWeight: 600 }}>
-            {client.onlineCount}/{client.deviceCount} · {onlinePct}%
-          </span>
+      {client.pending ? (
+        <div style={{ fontSize: "11px", color: "var(--color-text-muted)", lineHeight: 1.4 }}>
+          No telemetry yet. Drop an agent on the client&rsquo;s first endpoint
+          (<code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "10.5px" }}>
+            docs/AGENT-PROTOCOL.md
+          </code>) to populate this card.
         </div>
-        <div style={{ height: "4px", background: "var(--color-background-tertiary)", borderRadius: "999px", overflow: "hidden" }}>
-          <div style={{ width: `${onlinePct}%`, height: "100%", background: onlineTone }} />
-        </div>
-      </div>
+      ) : (
+        <>
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10.5px", color: "var(--color-text-muted)", marginBottom: "4px" }}>
+              <span>Online</span>
+              <span style={{ color: onlineTone, fontWeight: 600 }}>
+                {client.onlineCount}/{client.deviceCount} · {onlinePct}%
+              </span>
+            </div>
+            <div style={{ height: "4px", background: "var(--color-background-tertiary)", borderRadius: "999px", overflow: "hidden" }}>
+              <div style={{ width: `${onlinePct}%`, height: "100%", background: onlineTone }} />
+            </div>
+          </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "8px", fontSize: "11px" }}>
-        <Stat label="Hosts behind patch" value={client.hostsBehindPatch} tone={client.hostsBehindPatch > 0 ? "warn" : "ok"} />
-        <Stat label="Oldest hardware" value={client.oldestPurchase ? client.oldestPurchase.slice(0, 7) : "—"} tone="neutral" />
-      </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "8px", fontSize: "11px" }}>
+            <Stat label="Hosts behind patch" value={client.hostsBehindPatch} tone={client.hostsBehindPatch > 0 ? "warn" : "ok"} />
+            <Stat label="Oldest hardware" value={client.oldestPurchase ? client.oldestPurchase.slice(0, 7) : "—"} tone="neutral" />
+          </div>
+        </>
+      )}
     </Link>
   )
 }

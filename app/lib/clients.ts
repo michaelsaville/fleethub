@@ -26,6 +26,10 @@ export interface ClientRow {
   oldestPurchase: string | null
   newestActivity: Date | null
   isMock: boolean
+  /// True when the client has an Fl_Tenant row but no Fl_Device rows
+  /// yet — i.e. it was pre-created by an operator and is awaiting
+  /// first agent enrollment.
+  pending: boolean
 }
 
 export interface ClientDetail extends ClientRow {
@@ -61,6 +65,18 @@ export async function listClients(): Promise<ClientRow[]> {
     if (a.state === "open") {
       r.openAlerts++
       if (a.severity === "critical") r.criticalAlerts++
+    }
+  }
+
+  // Merge in pre-created Fl_Tenant rows that have no devices yet,
+  // so they show up in /clients before any agent has enrolled.
+  // We skip this in mock mode — the mock fleet is self-contained.
+  if (!isMock) {
+    const tenants = await prisma.fl_Tenant.findMany({ select: { name: true } })
+    for (const t of tenants) {
+      if (!byClient.has(t.name)) {
+        byClient.set(t.name, { ...blankRow(t.name, isMock), pending: true })
+      }
     }
   }
 
@@ -114,5 +130,6 @@ function blankRow(name: string, isMock: boolean): ClientRow {
     oldestPurchase: null,
     newestActivity: null,
     isMock,
+    pending: false,
   }
 }
