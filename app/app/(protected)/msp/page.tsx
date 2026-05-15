@@ -98,7 +98,11 @@ export default async function MspTriagePage({
         {rollup.clients.length === 0 ? (
           <EmptyState signalFiltered={signal !== "all"} />
         ) : (
-          <TriageTable clients={rollup.clients} />
+          <TriageTable
+            clients={rollup.clients}
+            ticketHubAvailable={rollup.ticketHubAvailable}
+            ticketHubPublicUrl={rollup.ticketHubPublicUrl}
+          />
         )}
       </div>
     </AppShell>
@@ -304,7 +308,15 @@ function AttentionCardView({ card }: { card: AttentionCard }) {
 
 // ─── Table ────────────────────────────────────────────────────────────────
 
-function TriageTable({ clients }: { clients: MspRollupClient[] }) {
+function TriageTable({
+  clients,
+  ticketHubAvailable,
+  ticketHubPublicUrl,
+}: {
+  clients: MspRollupClient[]
+  ticketHubAvailable: boolean
+  ticketHubPublicUrl: string
+}) {
   return (
     <div
       style={{
@@ -317,7 +329,7 @@ function TriageTable({ clients }: { clients: MspRollupClient[] }) {
       <table
         style={{
           width: "100%",
-          minWidth: 1100,
+          minWidth: ticketHubAvailable ? 1200 : 1100,
           borderCollapse: "collapse",
           fontSize: "12.5px",
         }}
@@ -336,17 +348,33 @@ function TriageTable({ clients }: { clients: MspRollupClient[] }) {
             <Th align="right">Failed&nbsp;scripts</Th>
             <Th align="right">Schedule</Th>
             <Th align="center">Audit</Th>
+            {ticketHubAvailable && <Th align="right">Tickets</Th>}
           </tr>
         </thead>
         <tbody>
-          {clients.map((c) => <Row key={c.name} client={c} />)}
+          {clients.map((c) => (
+            <Row
+              key={c.name}
+              client={c}
+              ticketHubAvailable={ticketHubAvailable}
+              ticketHubPublicUrl={ticketHubPublicUrl}
+            />
+          ))}
         </tbody>
       </table>
     </div>
   )
 }
 
-function Row({ client }: { client: MspRollupClient }) {
+function Row({
+  client,
+  ticketHubAvailable,
+  ticketHubPublicUrl,
+}: {
+  client: MspRollupClient
+  ticketHubAvailable: boolean
+  ticketHubPublicUrl: string
+}) {
   const enc = encodeURIComponent(client.name)
   const deviceTone: Tone =
     client.deviceTotal === 0 ? "neutral"
@@ -488,6 +516,20 @@ function Row({ client }: { client: MspRollupClient }) {
           {client.auditChainStatus === "broken-here" ? "BROKEN HERE" : "ok"}
         </Link>
       </Td>
+      {ticketHubAvailable && (
+        <Td align="right">
+          {client.openTickets == null || client.openTickets === 0 ? dim() : (
+            <a
+              href={`${ticketHubPublicUrl}/tickets?client=${enc}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={cellLinkStyle(client.openTickets >= 5 ? "bad" : client.openTickets >= 2 ? "warn" : "neutral")}
+            >
+              {client.openTickets}
+            </a>
+          )}
+        </Td>
+      )}
     </tr>
   )
 }

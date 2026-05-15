@@ -63,6 +63,12 @@ export interface MspRollupClient {
   // Audit chain — per-client status. "broken-here" only when the
   // global break is owned by this client (chain is fleet-wide).
   auditChainStatus: "ok" | "broken-here"
+  // TicketHub overlay — open ticket count from the cross-schema query
+  // (anything not in RESOLVED/CLOSED/CANCELLED). null when TH is
+  // unavailable; 0 when TH is present but has no open tickets for
+  // this client. See MspRollupResult.ticketHubAvailable for the
+  // "should I render this column at all?" flag.
+  openTickets: number | null
   // Composite (§4)
   riskScore: number
   // Provenance — true when this client has no devices yet but has an
@@ -94,6 +100,13 @@ export interface MspRollupResult {
   /** "Needs your attention" rail — 0-6 cards. Each card calls out a single,
    *  specific, deep-linkable problem. Empty rail = calm fleet. (§3.1) */
   attentionRail: AttentionCard[]
+  /** True when the cross-schema TicketHub query succeeded. False on any
+   *  error (missing schema, permission denied, etc.). When false the
+   *  table should hide the Tickets column entirely per design §3.2. */
+  ticketHubAvailable: boolean
+  /** Public-facing TicketHub base URL used by drill-down links. Reads
+   *  TICKETHUB_PUBLIC_URL with a sensible default. */
+  ticketHubPublicUrl: string
   /** Fleet-wide audit-chain status. Single chain; same answer applies to all
    *  rows. firstBadRow identifies the offending row when intact=false. */
   auditChain: {
@@ -248,6 +261,32 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
         totalRows: r.totalRows,
       }))
 
+  // TicketHub overlay — cross-schema $queryRaw, same pattern as
+  // Phase 5.13's pre-create form. Wrapped in try/catch so a missing
+  // schema (running FleetHub without TicketHub) silently hides the
+  // column instead of breaking the dashboard. §12 notes this should
+  // eventually become a typed view (`tickethub.fl_v_open_tickets`)
+  // committed-to as a contract by the TH side — Phase 6.1 follow-up.
+  const ticketHubPublicUrl = (process.env.TICKETHUB_PUBLIC_URL || "https://tickethub.pcc2k.com").replace(/\/$/, "")
+  const ticketCounts = new Map<string, number>()
+  let ticketHubAvailable = false
+  if (!isMock) {
+    try {
+      const rows = await prisma.$queryRaw<{ client_name: string; open_count: bigint }[]>`
+        SELECT c."name" AS client_name, COUNT(t.id) AS open_count
+        FROM tickethub.th_tickets t
+        JOIN tickethub.th_clients c ON c.id = t."clientId"
+        WHERE t.status NOT IN ('RESOLVED', 'CLOSED', 'CANCELLED')
+        GROUP BY c."name"
+      `
+      ticketHubAvailable = true
+      for (const r of rows) ticketCounts.set(r.client_name, Number(r.open_count))
+    } catch (err) {
+      ticketHubAvailable = false
+      console.warn("[msp-rollup] TicketHub overlay unavailable:", (err as Error).message)
+    }
+  }
+
   // ─── Aggregate per client ────────────────────────────────────────────
   const byClient = new Map<string, MspRollupClient>()
   const blank = (name: string, pending: boolean): MspRollupClient => ({
@@ -268,6 +307,7 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
     scheduleStalenessMs: null,
     scheduleCount: 0,
     auditChainStatus: "ok",
+    openTickets: null,
     riskScore: 0,
     pending,
   })
@@ -374,6 +414,16 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
     if (r) r.auditChainStatus = "broken-here"
   }
 
+  // TicketHub overlay — populate openTickets when TH is available.
+  // When TH is available but a client has no row in ticketCounts, the
+  // count is 0 (TH knows about no tickets for this client). When TH
+  // is unavailable, leave null so the table can hide the column.
+  if (ticketHubAvailable) {
+    for (const r of byClient.values()) {
+      r.openTickets = ticketCounts.get(r.name) ?? 0
+    }
+  }
+
   // Risk score — last pass, after all signals are settled.
   for (const r of byClient.values()) {
     const staleSchedule =
@@ -418,6 +468,8 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
     inScopeClientCount: scoped.length,
     clients: filtered,
     attentionRail,
+    ticketHubAvailable,
+    ticketHubPublicUrl,
     auditChain,
   }
 }
