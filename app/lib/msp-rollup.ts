@@ -1,4 +1,5 @@
 import "server-only"
+import { CronExpressionParser } from "cron-parser"
 import { prisma } from "@/lib/prisma"
 import { listAlerts } from "@/lib/alerts"
 import { listDevices, mockMode } from "@/lib/devices"
@@ -66,11 +67,30 @@ export interface MspRollupClient {
   pending: boolean
 }
 
+export interface AttentionCard {
+  /** Stable identifier for the card kind — useful for keys + analytics. */
+  kind:
+    | "audit-chain"
+    | "alert-critical"
+    | "kev-host"
+    | "offline-hosts"
+    | "stuck-deploy"
+    | "schedule-stale"
+  title: string
+  value: string
+  context: string
+  href: string
+  tone: "bad" | "warn" | "kev"
+}
+
 export interface MspRollupResult {
   generatedAt: Date
   /** Number of clients the caller is allowed to see (post-scope-filter). */
   inScopeClientCount: number
   clients: MspRollupClient[]
+  /** "Needs your attention" rail — 0-6 cards. Each card calls out a single,
+   *  specific, deep-linkable problem. Empty rail = calm fleet. (§3.1) */
+  attentionRail: AttentionCard[]
   /** Fleet-wide audit-chain status. Single chain; same answer applies to all
    *  rows. firstBadRow identifies the offending row when intact=false. */
   auditChain: {
@@ -127,10 +147,15 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
     listAlerts({ state: "all" }),
   ])
 
-  // Pre-build a device->client map so the per-deviceId aggregations
-  // (patches, deploys, scripts) can be grouped by client in one pass.
+  // Pre-build a device->client + device->hostname map so per-deviceId
+  // aggregations (patches, deploys, scripts) can be grouped by client
+  // in one pass, and the rail cards can name the offending host.
   const deviceClient = new Map<string, string>()
-  for (const d of devices) deviceClient.set(d.id, d.clientName)
+  const deviceHostname = new Map<string, string>()
+  for (const d of devices) {
+    deviceClient.set(d.id, d.clientName)
+    deviceHostname.set(d.id, d.hostname)
+  }
   const deviceIds = [...deviceClient.keys()]
 
   // ─── Bulk queries — five in parallel, scoped to live device set ─────
@@ -156,7 +181,11 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
             updatedAt: { lt: stuckCutoff },
             deviceId: { in: deviceIds },
           },
-          select: { deviceId: true },
+          select: {
+            deviceId: true,
+            deploymentId: true,
+            updatedAt: true,
+          },
         }),
         prisma.fl_ScriptRun.findMany({
           where: {
@@ -168,7 +197,15 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
         }),
         prisma.fl_ReportSchedule.findMany({
           where: { isActive: true },
-          select: { tenantName: true, lastFiredAt: true },
+          select: {
+            id: true,
+            tenantName: true,
+            kind: true,
+            cron: true,
+            timezone: true,
+            lastFiredAt: true,
+            createdAt: true,
+          },
         }),
         prisma.fl_Tenant.findMany({ select: { name: true } }),
       ])
@@ -320,10 +357,226 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
     b.riskScore - a.riskScore || a.name.localeCompare(b.name),
   )
 
+  const inScopeNames = new Set(scoped.map((r) => r.name))
+  const attentionRail = buildAttentionRail({
+    now,
+    inScopeNames,
+    alerts,
+    pendingPatchRows,
+    stuckDeployRows,
+    scheduleRows,
+    devices,
+    deviceClient,
+    deviceHostname,
+    auditChain,
+  })
+
   return {
     generatedAt,
     inScopeClientCount: scoped.length,
     clients: scoped,
+    attentionRail,
     auditChain,
   }
+}
+
+// ─── Attention rail builders ─────────────────────────────────────────────
+
+type AlertRow = Awaited<ReturnType<typeof listAlerts>>["rows"][number]
+type DeviceRow = Awaited<ReturnType<typeof listDevices>>["rows"][number]
+
+interface RailInput {
+  now: number
+  inScopeNames: Set<string>
+  alerts: AlertRow[]
+  pendingPatchRows: Array<{
+    deviceId: string
+    patch: { cvssMax: number | null; isKev: boolean } | null
+  }>
+  stuckDeployRows: Array<{ deviceId: string; deploymentId: string; updatedAt: Date }>
+  scheduleRows: Array<{
+    id: string
+    tenantName: string
+    kind: string
+    cron: string
+    timezone: string
+    lastFiredAt: Date | null
+    createdAt: Date
+  }>
+  devices: DeviceRow[]
+  deviceClient: Map<string, string>
+  deviceHostname: Map<string, string>
+  auditChain: MspRollupResult["auditChain"]
+}
+
+function buildAttentionRail(i: RailInput): AttentionCard[] {
+  const cards: AttentionCard[] = []
+
+  // 1. Audit chain — fleet-wide signal; show only when the bad row's
+  //    owning client is in scope (so out-of-scope operators can't
+  //    infer "something's wrong over there").
+  if (
+    !i.auditChain.intact &&
+    i.auditChain.firstBadRow &&
+    (!i.auditChain.firstBadRow.clientName ||
+      i.inScopeNames.has(i.auditChain.firstBadRow.clientName))
+  ) {
+    const r = i.auditChain.firstBadRow
+    cards.push({
+      kind: "audit-chain",
+      title: "Audit chain integrity broken",
+      value: `Row ${r.index + 1}`,
+      context: `${r.clientName ?? "unattributed"} · ${r.reason}`,
+      href: r.clientName
+        ? `/audit?client=${encodeURIComponent(r.clientName)}`
+        : `/audit`,
+      tone: "bad",
+    })
+  }
+
+  // 2. Oldest open critical alert in scope.
+  const openCritical = i.alerts.filter(
+    (a) =>
+      a.state === "open" &&
+      a.severity === "critical" &&
+      a.clientName &&
+      i.inScopeNames.has(a.clientName),
+  )
+  if (openCritical.length > 0) {
+    const oldest = openCritical.reduce((a, b) => (a.createdAt < b.createdAt ? a : b))
+    cards.push({
+      kind: "alert-critical",
+      title: "Oldest open critical alert",
+      value: formatAge(i.now - oldest.createdAt.getTime()),
+      context: `${oldest.clientName} · ${oldest.title}`,
+      href: `/alerts/${oldest.id}`,
+      tone: "bad",
+    })
+  }
+
+  // 3. Host with most KEV CVEs unpatched (in scope).
+  const kevByHost = new Map<string, number>()
+  for (const p of i.pendingPatchRows) {
+    if (!p.patch?.isKev) continue
+    const client = i.deviceClient.get(p.deviceId)
+    if (!client || !i.inScopeNames.has(client)) continue
+    kevByHost.set(p.deviceId, (kevByHost.get(p.deviceId) ?? 0) + 1)
+  }
+  if (kevByHost.size > 0) {
+    let topHost = ""
+    let topCount = 0
+    for (const [hostId, count] of kevByHost) {
+      if (count > topCount) {
+        topHost = hostId
+        topCount = count
+      }
+    }
+    const hostname = i.deviceHostname.get(topHost) ?? topHost
+    const client = i.deviceClient.get(topHost) ?? "—"
+    cards.push({
+      kind: "kev-host",
+      title: "Most KEV CVEs unpatched",
+      value: `${topCount} KEV`,
+      context: `${hostname} · ${client}`,
+      href: `/devices/${topHost}?tab=patches`,
+      tone: "kev",
+    })
+  }
+
+  // 4. Client with the most hosts offline >24h.
+  const offlineByClient = new Map<string, number>()
+  const offlineCutoff = new Date(i.now - 24 * 60 * 60 * 1000)
+  for (const d of i.devices) {
+    if (!i.inScopeNames.has(d.clientName)) continue
+    if (d.lastSeenAt && d.lastSeenAt < offlineCutoff) {
+      offlineByClient.set(d.clientName, (offlineByClient.get(d.clientName) ?? 0) + 1)
+    }
+  }
+  if (offlineByClient.size > 0) {
+    let topClient = ""
+    let topCount = 0
+    for (const [client, count] of offlineByClient) {
+      if (count > topCount) {
+        topClient = client
+        topCount = count
+      }
+    }
+    cards.push({
+      kind: "offline-hosts",
+      title: "Hosts offline >24h",
+      value: `${topCount} host${topCount === 1 ? "" : "s"}`,
+      context: topClient,
+      href: `/clients/${encodeURIComponent(topClient)}?tab=devices&filter=offline-24h`,
+      tone: "bad",
+    })
+  }
+
+  // 5. Oldest stuck deploy (in scope).
+  const scopedStuck = i.stuckDeployRows.filter((t) => {
+    const client = i.deviceClient.get(t.deviceId)
+    return client && i.inScopeNames.has(client)
+  })
+  if (scopedStuck.length > 0) {
+    const oldest = scopedStuck.reduce((a, b) => (a.updatedAt < b.updatedAt ? a : b))
+    const client = i.deviceClient.get(oldest.deviceId) ?? "—"
+    const hostname = i.deviceHostname.get(oldest.deviceId) ?? oldest.deviceId
+    cards.push({
+      kind: "stuck-deploy",
+      title: "Stuck deploy",
+      value: `${formatAge(i.now - oldest.updatedAt.getTime())} stuck`,
+      context: `${hostname} · ${client}`,
+      href: `/deployments/${oldest.deploymentId}`,
+      tone: "warn",
+    })
+  }
+
+  // 6. Most-overdue active schedule (cron-derived). A schedule that
+  //    should have fired ≥1h ago is overdue; pick the one with the
+  //    largest "should-have-fired ago" delta.
+  let mostOverdue: {
+    sched: RailInput["scheduleRows"][number]
+    overdueMs: number
+  } | null = null
+  for (const s of i.scheduleRows) {
+    if (!i.inScopeNames.has(s.tenantName)) continue
+    let nextExpected: Date
+    try {
+      const baseTime = s.lastFiredAt ?? s.createdAt
+      const it = CronExpressionParser.parse(s.cron, {
+        currentDate: baseTime,
+        tz: s.timezone || "UTC",
+      })
+      nextExpected = it.next().toDate()
+    } catch {
+      continue
+    }
+    const overdueMs = i.now - nextExpected.getTime()
+    if (overdueMs < 60 * 60 * 1000) continue // <1h overdue is normal jitter
+    if (!mostOverdue || overdueMs > mostOverdue.overdueMs) {
+      mostOverdue = { sched: s, overdueMs }
+    }
+  }
+  if (mostOverdue) {
+    cards.push({
+      kind: "schedule-stale",
+      title: "Most overdue schedule",
+      value: `${formatAge(mostOverdue.overdueMs)} late`,
+      context: `${mostOverdue.sched.tenantName} · ${mostOverdue.sched.kind}`,
+      href: `/reports/scheduled?client=${encodeURIComponent(mostOverdue.sched.tenantName)}`,
+      tone: "warn",
+    })
+  }
+
+  return cards
+}
+
+function formatAge(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 48) return `${h}h`
+  const d = Math.floor(h / 24)
+  return `${d}d`
 }

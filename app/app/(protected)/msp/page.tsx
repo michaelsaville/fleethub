@@ -1,7 +1,7 @@
 import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import { requireSession } from "@/lib/authz"
-import { listMspRollup, type MspRollupClient } from "@/lib/msp-rollup"
+import { listMspRollup, type MspRollupClient, type AttentionCard } from "@/lib/msp-rollup"
 import RefreshButton from "./RefreshButton"
 
 export const dynamic = "force-dynamic"
@@ -46,32 +46,8 @@ export default async function MspTriagePage() {
           </div>
         </header>
 
-        {!rollup.auditChain.intact && rollup.auditChain.firstBadRow && (
-          <Link
-            href={`/audit${
-              rollup.auditChain.firstBadRow.clientName
-                ? `?client=${encodeURIComponent(rollup.auditChain.firstBadRow.clientName)}`
-                : ""
-            }`}
-            style={{
-              display: "block",
-              padding: "10px 12px",
-              background: "var(--color-danger-soft, rgba(239, 68, 68, 0.1))",
-              border: "0.5px solid var(--color-danger, #b91c1c)",
-              borderRadius: "8px",
-              color: "var(--color-danger, #b91c1c)",
-              fontSize: "12px",
-              textDecoration: "none",
-            }}
-          >
-            <strong>Audit chain integrity broken</strong> at row {rollup.auditChain.firstBadRow.index + 1}
-            {" "}({rollup.auditChain.firstBadRow.reason}). First-bad-row owner:
-            {" "}
-            <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "11.5px" }}>
-              {rollup.auditChain.firstBadRow.clientName ?? "—"}
-            </code>
-            . Click to investigate.
-          </Link>
+        {rollup.attentionRail.length > 0 && (
+          <AttentionRail cards={rollup.attentionRail} />
         )}
 
         {rollup.clients.length === 0 ? (
@@ -81,6 +57,82 @@ export default async function MspTriagePage() {
         )}
       </div>
     </AppShell>
+  )
+}
+
+// ─── Attention rail ──────────────────────────────────────────────────────
+
+function AttentionRail({ cards }: { cards: AttentionCard[] }) {
+  return (
+    <section
+      aria-label="Needs your attention"
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+        gap: "10px",
+      }}
+    >
+      {cards.map((c) => <AttentionCardView key={c.kind} card={c} />)}
+    </section>
+  )
+}
+
+function AttentionCardView({ card }: { card: AttentionCard }) {
+  const tone =
+    card.tone === "bad" ? {
+      border: "var(--color-danger, #b91c1c)",
+      bg: "var(--color-danger-soft, rgba(239, 68, 68, 0.08))",
+      label: "var(--color-danger, #b91c1c)",
+    } : card.tone === "kev" ? {
+      border: "var(--color-kev, #7f1d1d)",
+      bg: "rgba(127, 29, 29, 0.08)",
+      label: "var(--color-kev, #7f1d1d)",
+    } : {
+      border: "var(--color-warning, #b45309)",
+      bg: "var(--color-warning-soft, rgba(234, 179, 8, 0.1))",
+      label: "var(--color-warning, #b45309)",
+    }
+  return (
+    <Link
+      href={card.href}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "4px",
+        padding: "10px 12px",
+        background: tone.bg,
+        border: `0.5px solid ${tone.border}`,
+        borderRadius: "8px",
+        textDecoration: "none",
+        color: "var(--color-text-primary)",
+      }}
+    >
+      <div
+        style={{
+          fontSize: "9.5px",
+          fontWeight: 600,
+          color: tone.label,
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+        }}
+      >
+        {card.title}
+      </div>
+      <div style={{ fontSize: "16px", fontWeight: 700, color: tone.label }}>
+        {card.value}
+      </div>
+      <div
+        style={{
+          fontSize: "11px",
+          color: "var(--color-text-secondary)",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {card.context}
+      </div>
+    </Link>
   )
 }
 
