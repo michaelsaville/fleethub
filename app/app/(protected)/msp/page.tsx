@@ -1,19 +1,62 @@
 import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import { requireSession } from "@/lib/authz"
-import { listMspRollup, type MspRollupClient, type AttentionCard } from "@/lib/msp-rollup"
+import {
+  listMspRollup,
+  SIGNAL_FILTERS,
+  SEVERITY_FILTERS,
+  type MspRollupClient,
+  type AttentionCard,
+  type SignalFilter,
+  type SeverityFilter,
+} from "@/lib/msp-rollup"
 import RefreshButton from "./RefreshButton"
 
 export const dynamic = "force-dynamic"
 
 // Phase 6 step 2 — the triage view. One row per managed client,
-// sorted by composite risk score DESC. Step 4 adds the "needs your
-// attention" rail; step 5 adds filters; step 7 adds the TicketHub
-// overlay column. Design: docs/PHASE-6-DESIGN.md §3.
+// sorted by composite risk score DESC. Step 4 added the "needs
+// your attention" rail; step 5 added URL-state filters; step 7
+// adds the TicketHub overlay column. Design: docs/PHASE-6-DESIGN.md §3.
 
-export default async function MspTriagePage() {
+const SIGNAL_LABELS: Record<SignalFilter, string> = {
+  all: "All",
+  alerts: "Alerts",
+  offline: "Offline",
+  patches: "Patches",
+  deploys: "Deploys",
+  scripts: "Scripts",
+  schedules: "Schedules",
+  audit: "Audit",
+}
+const SEVERITY_LABELS: Record<SeverityFilter, string> = {
+  all: "All",
+  "critical-only": "Critical only",
+  "warn+": "Warn+",
+  "info+": "Info+",
+}
+
+function parseSignal(raw: string | undefined): SignalFilter {
+  return (SIGNAL_FILTERS as readonly string[]).includes(raw ?? "")
+    ? (raw as SignalFilter)
+    : "all"
+}
+function parseSeverity(raw: string | undefined): SeverityFilter {
+  return (SEVERITY_FILTERS as readonly string[]).includes(raw ?? "")
+    ? (raw as SeverityFilter)
+    : "warn+"
+}
+
+export default async function MspTriagePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ signal?: string; severity?: string }>
+}) {
   await requireSession()
-  const rollup = await listMspRollup()
+  const sp = await searchParams
+  const signal = parseSignal(sp.signal)
+  const severity = parseSeverity(sp.severity)
+  const rollup = await listMspRollup({ signal, severity })
   const totalOpenAlerts = rollup.clients.reduce((n, c) => n + c.alertsOpen, 0)
   const generatedAt = rollup.generatedAt.toISOString().slice(11, 19) // HH:MM:SS
 
@@ -46,17 +89,140 @@ export default async function MspTriagePage() {
           </div>
         </header>
 
+        <FilterBar signal={signal} severity={severity} inScopeClientCount={rollup.inScopeClientCount} />
+
         {rollup.attentionRail.length > 0 && (
           <AttentionRail cards={rollup.attentionRail} />
         )}
 
         {rollup.clients.length === 0 ? (
-          <EmptyState />
+          <EmptyState signalFiltered={signal !== "all"} />
         ) : (
           <TriageTable clients={rollup.clients} />
         )}
       </div>
     </AppShell>
+  )
+}
+
+// ─── Filter bar ──────────────────────────────────────────────────────────
+
+function FilterBar({
+  signal,
+  severity,
+  inScopeClientCount,
+}: {
+  signal: SignalFilter
+  severity: SeverityFilter
+  inScopeClientCount: number
+}) {
+  return (
+    <section
+      aria-label="Triage filters"
+      style={{
+        position: "sticky",
+        top: 0,
+        zIndex: 1,
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "14px",
+        padding: "8px 10px",
+        background: "var(--color-background-primary, #fff)",
+        border: "0.5px solid var(--color-border-tertiary)",
+        borderRadius: "8px",
+      }}
+    >
+      <FilterRow
+        label="Signal"
+        options={SIGNAL_FILTERS}
+        labels={SIGNAL_LABELS}
+        current={signal}
+        otherParam={["severity", severity]}
+        defaultValue="all"
+      />
+      <FilterRow
+        label="Severity"
+        options={SEVERITY_FILTERS}
+        labels={SEVERITY_LABELS}
+        current={severity}
+        otherParam={["signal", signal]}
+        defaultValue="warn+"
+      />
+      <span
+        style={{
+          marginLeft: "auto",
+          alignSelf: "center",
+          fontSize: "11px",
+          color: "var(--color-text-muted)",
+        }}
+      >
+        {inScopeClientCount} client{inScopeClientCount === 1 ? "" : "s"} in scope
+      </span>
+    </section>
+  )
+}
+
+function FilterRow<T extends string>({
+  label,
+  options,
+  labels,
+  current,
+  otherParam,
+  defaultValue,
+}: {
+  label: string
+  options: readonly T[]
+  labels: Record<T, string>
+  current: T
+  otherParam: [string, string]
+  defaultValue: T
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+      <span
+        style={{
+          fontSize: "10px",
+          fontWeight: 600,
+          color: "var(--color-text-muted)",
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          marginRight: "2px",
+        }}
+      >
+        {label}
+      </span>
+      {options.map((opt) => {
+        const active = opt === current
+        const params = new URLSearchParams()
+        if (otherParam[1] && otherParam[1] !== "all" && otherParam[1] !== "warn+") {
+          params.set(otherParam[0], otherParam[1])
+        }
+        if (opt !== defaultValue) {
+          const key = label === "Signal" ? "signal" : "severity"
+          params.set(key, opt)
+        }
+        const qs = params.toString()
+        const href = qs ? `/msp?${qs}` : `/msp`
+        return (
+          <Link
+            key={opt}
+            href={href}
+            style={{
+              padding: "3px 9px",
+              fontSize: "11.5px",
+              fontWeight: active ? 600 : 500,
+              color: active ? "#fff" : "var(--color-text-secondary)",
+              background: active ? "var(--color-accent, #F97316)" : "var(--color-background-secondary)",
+              border: "0.5px solid var(--color-border-tertiary)",
+              borderRadius: "999px",
+              textDecoration: "none",
+            }}
+          >
+            {labels[opt]}
+          </Link>
+        )
+      })}
+    </div>
   )
 }
 
@@ -396,7 +562,28 @@ function formatAge(ms: number): string {
 
 // ─── Empty state ──────────────────────────────────────────────────────────
 
-function EmptyState() {
+function EmptyState({ signalFiltered }: { signalFiltered: boolean }) {
+  if (signalFiltered) {
+    return (
+      <div
+        style={{
+          padding: "40px",
+          textAlign: "center",
+          background: "var(--color-background-secondary)",
+          border: "0.5px solid var(--color-border-tertiary)",
+          borderRadius: "10px",
+          color: "var(--color-text-muted)",
+          fontSize: "13px",
+        }}
+      >
+        No clients with values in the chosen signal.{" "}
+        <Link href="/msp" style={{ color: "var(--color-accent, #F97316)", fontWeight: 600 }}>
+          Clear filter
+        </Link>
+        {" "}to see the full fleet.
+      </div>
+    )
+  }
   return (
     <div
       style={{

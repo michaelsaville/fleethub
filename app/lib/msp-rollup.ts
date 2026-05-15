@@ -41,10 +41,13 @@ export interface MspRollupClient {
   deviceTotal: number
   deviceOnline: number
   deviceOfflineOver24h: number
-  // Alerts
+  // Alerts. alertsOpen is severity-filtered (default warn+ drops info);
+  // alertsCritical / alertsWarn / alertsInfo are the raw tier counts so
+  // callers can re-derive if needed.
   alertsOpen: number
   alertsCritical: number
   alertsWarn: number
+  alertsInfo: number
   oldestOpenAlertAt: Date | null
   // Patches
   hostsBehindPatch: number
@@ -103,11 +106,36 @@ export interface MspRollupResult {
   }
 }
 
+export type SignalFilter =
+  | "all"
+  | "alerts"
+  | "offline"
+  | "patches"
+  | "deploys"
+  | "scripts"
+  | "schedules"
+  | "audit"
+
+export type SeverityFilter = "all" | "critical-only" | "warn+" | "info+"
+
+export const SIGNAL_FILTERS: readonly SignalFilter[] = [
+  "all", "alerts", "offline", "patches", "deploys", "scripts", "schedules", "audit",
+] as const
+export const SEVERITY_FILTERS: readonly SeverityFilter[] = [
+  "all", "critical-only", "warn+", "info+",
+] as const
+
 export interface MspRollupOpts {
   /** When set, only return rows whose name is in this allow-list. v1
    *  hook for fleet_staff_client_scope (HIPAA-READY §3); when undefined
    *  or "all", returns every client. */
   scope?: string[] | "all"
+  /** Collapse the table to clients with a non-zero value in the chosen
+   *  column. Default "all" = no row filter. */
+  signal?: SignalFilter
+  /** Determines which alert tiers count toward alertsOpen + the signal=
+   *  alerts filter. Default "warn+" drops chatty info per §3.3. */
+  severity?: SeverityFilter
 }
 
 // ─── Risk score (split for unit-testability) ─────────────────────────────
@@ -230,6 +258,7 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
     alertsOpen: 0,
     alertsCritical: 0,
     alertsWarn: 0,
+    alertsInfo: 0,
     oldestOpenAlertAt: null,
     hostsBehindPatch: 0,
     oldestUnpatchedCvss: null,
@@ -261,18 +290,24 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
     byClient.set(d.clientName, r)
   }
 
-  // Alerts
+  // Alerts — count per tier; alertsOpen is the severity-filtered sum
+  // applied in a separate pass below so the raw tier counts stay
+  // available for callers that want them.
   for (const a of alerts) {
     if (!a.clientName) continue
     const r = byClient.get(a.clientName)
     if (!r) continue
     if (a.state !== "open") continue
-    r.alertsOpen++
     if (a.severity === "critical") r.alertsCritical++
     else if (a.severity === "warn") r.alertsWarn++
+    else r.alertsInfo++
     if (!r.oldestOpenAlertAt || a.createdAt < r.oldestOpenAlertAt) {
       r.oldestOpenAlertAt = a.createdAt
     }
+  }
+  const severity: SeverityFilter = opts.severity ?? "warn+"
+  for (const r of byClient.values()) {
+    r.alertsOpen = visibleAlertCount(r, severity)
   }
 
   // Patches — count unique hosts-behind from Fl_PatchInstall as the
@@ -357,6 +392,13 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
     b.riskScore - a.riskScore || a.name.localeCompare(b.name),
   )
 
+  // ─── Signal filter — applies AFTER scope + sort so the rail (built
+  //   below) and the inScopeClientCount still reflect the operator's
+  //   real scope, while the visible table collapses to only clients
+  //   with non-zero values in the chosen column.
+  const signal: SignalFilter = opts.signal ?? "all"
+  const filtered = signal === "all" ? scoped : scoped.filter((r) => matchesSignal(r, signal))
+
   const inScopeNames = new Set(scoped.map((r) => r.name))
   const attentionRail = buildAttentionRail({
     now,
@@ -374,9 +416,33 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
   return {
     generatedAt,
     inScopeClientCount: scoped.length,
-    clients: scoped,
+    clients: filtered,
     attentionRail,
     auditChain,
+  }
+}
+
+// ─── Filter helpers ──────────────────────────────────────────────────────
+
+function visibleAlertCount(c: MspRollupClient, severity: SeverityFilter): number {
+  switch (severity) {
+    case "critical-only": return c.alertsCritical
+    case "warn+":         return c.alertsCritical + c.alertsWarn
+    case "info+":
+    case "all":           return c.alertsCritical + c.alertsWarn + c.alertsInfo
+  }
+}
+
+function matchesSignal(c: MspRollupClient, signal: SignalFilter): boolean {
+  switch (signal) {
+    case "all":       return true
+    case "alerts":    return c.alertsOpen > 0
+    case "offline":   return c.deviceOfflineOver24h > 0
+    case "patches":   return c.hostsBehindPatch > 0
+    case "deploys":   return c.stuckDeploys > 0
+    case "scripts":   return c.failedScripts24h > 0
+    case "schedules": return c.scheduleStalenessMs != null && c.scheduleStalenessMs > 24 * 60 * 60 * 1000
+    case "audit":     return c.auditChainStatus === "broken-here"
   }
 }
 

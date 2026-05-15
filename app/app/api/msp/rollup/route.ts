@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionContext } from "@/lib/authz"
-import { listMspRollup } from "@/lib/msp-rollup"
+import {
+  listMspRollup,
+  SIGNAL_FILTERS,
+  SEVERITY_FILTERS,
+  type SignalFilter,
+  type SeverityFilter,
+} from "@/lib/msp-rollup"
 
 // Phase 6 step 1 — JSON rollup for the upcoming /msp triage view +
 // any external monitoring that wants to scrape fleet posture. The
@@ -30,6 +36,14 @@ export async function GET(req: NextRequest) {
     scopeParam && scopeParam.trim()
       ? scopeParam.split(",").map((s) => s.trim()).filter(Boolean)
       : "all"
-  const result = await listMspRollup({ scope })
+  const signalRaw = req.nextUrl.searchParams.get("signal") ?? ""
+  const severityRaw = req.nextUrl.searchParams.get("severity") ?? ""
+  const signal = (SIGNAL_FILTERS as readonly string[]).includes(signalRaw)
+    ? (signalRaw as SignalFilter)
+    : "all"
+  const severity = (SEVERITY_FILTERS as readonly string[]).includes(severityRaw)
+    ? (severityRaw as SeverityFilter)
+    : "warn+"
+  const result = await listMspRollup({ scope, signal, severity })
   return NextResponse.json(result)
 }
