@@ -48,6 +48,14 @@ function parseSeverity(raw: string | undefined): SeverityFilter {
     : "warn+"
 }
 
+function buildFilterQuery(opts: { signal: SignalFilter; severity: SeverityFilter }): string {
+  const params = new URLSearchParams()
+  if (opts.signal !== "all") params.set("signal", opts.signal)
+  if (opts.severity !== "warn+") params.set("severity", opts.severity)
+  const qs = params.toString()
+  return qs ? `?${qs}` : ""
+}
+
 export default async function MspTriagePage({
   searchParams,
 }: {
@@ -99,6 +107,21 @@ export default async function MspTriagePage({
             <span style={{ fontSize: "11px", color: "var(--color-text-muted)" }}>
               Generated {generatedAt} UTC
             </span>
+            <a
+              href={`/msp/export.csv${buildFilterQuery({ signal, severity })}`}
+              style={{
+                padding: "6px 12px",
+                fontSize: "12px",
+                fontWeight: 600,
+                color: "var(--color-text-secondary)",
+                background: "var(--color-background-secondary)",
+                border: "0.5px solid var(--color-border-tertiary)",
+                borderRadius: "6px",
+                textDecoration: "none",
+              }}
+            >
+              Export CSV
+            </a>
             <RefreshButton />
           </div>
         </header>
