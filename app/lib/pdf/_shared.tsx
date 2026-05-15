@@ -81,27 +81,36 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   td: { fontSize: 8.5, paddingHorizontal: 4 },
-  // Footer
-  footer: {
+  // Footer — single fixed slot. The previous incarnation tried to put
+  // a static left text + page-number on the right via either
+  // (a) a single <View fixed> with position:absolute + both left and
+  //     right and flexbox justify-between, or
+  // (b) two separate fixed slots, or
+  // (c) a <Text fixed render> directly on the Page.
+  // All three render nothing visible in @react-pdf 4.5.1: pattern (a)
+  // collapses because absolute + left+right + auto-width = zero width
+  // in yoga; patterns (b)/(c) fire the render fn (verified via
+  // console.log) but never paint the resulting glyphs when the
+  // ancestor is absolutely positioned. Page numbers via `render` are
+  // therefore unavailable for now. Tracked as a known react-pdf 4.x
+  // gotcha; revisit when the lib upgrades.
+  footerSlot: {
     position: "absolute",
     bottom: 24,
     left: 36,
-    right: 36,
-    flexDirection: "row",
-    justifyContent: "space-between",
+  },
+  footerText: {
     fontSize: 7.5,
     color: COLOR.muted,
   },
-  pageNumber: { textAlign: "right" },
 })
 
 export function PdfFooter({ tenantName, footerText }: { tenantName: string; footerText: string | null }) {
   return (
-    <View style={styles.footer} fixed>
-      <Text>
+    <View style={styles.footerSlot} fixed>
+      <Text style={styles.footerText}>
         {footerText ?? `${tenantName} - Confidential - FleetHub generated`}
       </Text>
-      <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} />
     </View>
   )
 }
