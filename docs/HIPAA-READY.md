@@ -70,13 +70,30 @@ this externally.
 - **No DELETE, no UPDATE.** Schema has no DELETE policy at the DB role
   level — the `dochub` Postgres user must be REVOKEd from
   `DELETE / UPDATE` on the audit table. Application code never issues
-  either.
+  either. Apply this with `scripts/hipaa-audit-revoke.sql` (idempotent).
+  Verify with `psql … -c "\\dp fleethub.fl_audit_log"` — the application
+  role should show INSERT + SELECT but no UPDATE/DELETE.
 - Each row has `prev_hash` (SHA-256 of the previous row's full content)
   and `row_hash` (SHA-256 of this row's content + prev_hash). Tampering
   with any historical row breaks the chain — verifiable on demand by a
   read-only verifier endpoint.
 - **Retention: 6 years minimum** (HIPAA §164.530(j)(2)). Backup
   retention policy enforces; rows are never expired in-place.
+- **Generated reports are retention-swept, not deleted.** Each
+  `Fl_Report` row carries `retentionUntil` (defaulted from
+  `Fl_Tenant.reportRetentionDays`, 2190d/6y for HIPAA tenants). The
+  `/api/cron/report-expire` cron unlinks the on-disk PDF/ZIP past that
+  date and flips `state="expired"` with `artifactUrl=null` — the row
+  itself remains as forensic record. Schedule daily, bearer-auth with
+  `FLEETHUB_AGENT_SECRET`.
+- **Evidence ZIP manifests are Ed25519-signed** when
+  `FLEETHUB_SIGNING_PRIVATE_KEY_PEM` is configured. The signature
+  covers a canonical form of the manifest (sorted keys, no whitespace,
+  signature field stripped). Public key is published at
+  `/api/well-known/fleethub-signing-key` and inlined in the manifest
+  for self-contained verification. `/api/reports/manifest/verify`
+  accepts a manifest JSON and returns ok=true/false. When unset, the
+  manifest carries `signature=null` (Phase 5 step-11 behavior).
 
 ### 3. Authentication + access control
 

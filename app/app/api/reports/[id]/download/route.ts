@@ -28,6 +28,12 @@ export async function GET(
   if (!report) {
     return NextResponse.json({ error: "report not found" }, { status: 404 })
   }
+  if (report.state === "expired") {
+    return NextResponse.json(
+      { error: "report has expired and was retention-swept" },
+      { status: 410 },
+    )
+  }
   if (report.state !== "ready" && report.state !== "delivered") {
     return NextResponse.json(
       { error: `report not yet ready (state=${report.state})` },

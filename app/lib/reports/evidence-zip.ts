@@ -4,6 +4,7 @@ import JSZip from "jszip"
 import { prisma } from "@/lib/prisma"
 import { buildPatchComplianceReport } from "@/lib/reports/patch-compliance"
 import type { ReportKind } from "@/lib/reports/render"
+import { signManifest, type ManifestSignature } from "@/lib/reports/manifest-signing"
 
 // Phase 5 step 11 — Evidence ZIP packaging.
 //
@@ -115,6 +116,12 @@ export async function buildEvidenceZip(
       bytes: byteLength(f.bytes),
     })),
   })
+  // Sign the manifest if a server-wide Ed25519 key is configured.
+  // signManifest() returns null when FLEETHUB_SIGNING_PRIVATE_KEY_PEM
+  // is unset — the manifest then keeps signature=null (step-11 v1
+  // behavior). Sign happens AFTER buildManifest so the canonical-
+  // signing form is over the fully-populated manifest minus signature.
+  manifest.signature = signManifest(manifest)
   zip.file("manifest.json", JSON.stringify(manifest, null, 2))
 
   // 8. README — auditor walkthrough.
@@ -500,7 +507,22 @@ interface ManifestInput {
   files: Array<{ name: string; sha256: string; bytes: number }>
 }
 
-function buildManifest(args: ManifestInput) {
+interface ManifestObject {
+  schemaVersion: number
+  generatedAt: string
+  generatedBy: string | null
+  tenant: string
+  reportId: string
+  reportKind: ReportKind
+  audience: "tech" | "client" | "auditor"
+  period: { start: string; end: string }
+  auditChain: { tipHash: string | null; intactAtPackageTime: boolean }
+  files: Array<{ name: string; sha256: string; bytes: number }>
+  fleethubVersion: string
+  signature: ManifestSignature | null
+}
+
+function buildManifest(args: ManifestInput): ManifestObject {
   return {
     schemaVersion: 1,
     generatedAt: args.input.generatedAt.toISOString(),
@@ -519,10 +541,8 @@ function buildManifest(args: ManifestInput) {
     },
     files: args.files,
     fleethubVersion: args.input.fleethubVersion,
-    // Ed25519 manifest signature is reserved for step 11.5 once the
-    // tenant compliance-key management surface lands. v1 leaves this
-    // null; per-file sha256 + audit-chain tip hash are the integrity
-    // guarantees for now.
+    // Filled in by buildEvidenceZip() after manifest is otherwise complete,
+    // since the signature is computed over the rest of the manifest.
     signature: null,
   }
 }
@@ -568,8 +588,11 @@ function buildReadme(args: ReadmeInput): string {
     `      and the operator's justification (when filled in).`,
     `  manifest.json`,
     `      Per-file SHA-256 + audit-chain tip hash + report metadata.`,
-    `      Ed25519 signature reserved for a future revision (signature=null`,
-    `      in v1).`,
+    `      When FleetHub is configured with a signing key, the manifest`,
+    `      carries an Ed25519 signature over its other fields and inlines`,
+    `      the public key PEM; verify with the recipe in "Verifying`,
+    `      integrity" below. Older packages (or installs without a key)`,
+    `      have signature=null.`,
     ``,
     `Verifying integrity`,
     `-------------------`,
@@ -580,6 +603,15 @@ function buildReadme(args: ReadmeInput): string {
     `   /api/audit/verify. The tip hash here must remain present in the`,
     `   live chain (the live tip moves forward over time, but every row`,
     `   up to and including this hash must stay intact).`,
+    `3. If manifest.json carries a signature object, verify the Ed25519`,
+    `   signature: take the manifest, drop the "signature" field, sort`,
+    `   all object keys recursively, JSON.stringify with no whitespace,`,
+    `   and verify that signature.sig (base64) is a valid Ed25519`,
+    `   signature of those bytes under signature.publicKeyPem. Cross-`,
+    `   check signature.publicKeyPem against the public key published`,
+    `   at <FleetHub URL>/api/well-known/fleethub-signing-key — they`,
+    `   must match. A pre-built /api/reports/manifest/verify endpoint`,
+    `   accepts the manifest as JSON and returns ok=true|false.`,
     ``,
     `Questions: contact your MSP.`,
     ``,
