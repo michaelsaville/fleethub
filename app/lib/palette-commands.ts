@@ -1,5 +1,6 @@
 import "server-only"
 import { prisma } from "@/lib/prisma"
+import { clientSlug } from "@/lib/msp-rollup"
 
 // Cmd-K command parser. Recognizes the verbs from PHASE-3-DESIGN §14
 // + PHASE-2-DESIGN §8 and resolves them to fully-qualified destinations:
@@ -90,6 +91,11 @@ export async function parsePaletteCommand(query: string): Promise<PaletteCommand
     const scriptQ = tokens.slice(startIdx, onIdx > 0 ? onIdx : undefined).join(" ")
     const hostQ = onIdx > 0 ? tokens.slice(onIdx + 1).join(" ") : null
     return resolveRunScript(scriptQ, hostQ)
+  }
+
+  // triage [signal|severity|<client-name>]
+  if (tokens[0] === "triage") {
+    return resolveTriage(tokens.slice(1).join(" "))
   }
 
   return []
@@ -424,6 +430,108 @@ async function resolveRunScript(
       hint: `${s.shell} · ${s.category ?? "uncategorized"} · pre-fills run form`,
       href: `/scripts/${s.id}/run${params}`,
       icon: "⚡",
+    }
+  })
+}
+
+// ─── triage ───────────────────────────────────────────────────────────────
+
+// Aliases for friendlier typing. Severity values mirror SEVERITY_FILTERS;
+// signals mirror SIGNAL_FILTERS, both defined in lib/msp-rollup.
+const SIGNAL_ALIASES: Record<string, string> = {
+  alerts: "alerts",
+  alert: "alerts",
+  offline: "offline",
+  off: "offline",
+  patches: "patches",
+  patch: "patches",
+  deploys: "deploys",
+  deploy: "deploys",
+  scripts: "scripts",
+  script: "scripts",
+  schedules: "schedules",
+  schedule: "schedules",
+  audit: "audit",
+  chain: "audit",
+}
+const SEVERITY_ALIASES: Record<string, string> = {
+  critical: "critical-only",
+  crit: "critical-only",
+  "critical-only": "critical-only",
+  warn: "warn+",
+  "warn+": "warn+",
+  warning: "warn+",
+  info: "info+",
+  "info+": "info+",
+  all: "all",
+}
+
+async function resolveTriage(rest: string): Promise<PaletteCommand[]> {
+  const q = rest.trim().toLowerCase()
+
+  // Bare `triage` → open the dashboard with defaults.
+  if (q.length === 0) {
+    return [{
+      id: "cmd:triage",
+      category: "Commands" as const,
+      label: "Open Triage",
+      hint: "Cross-tenant MSP rollup at /msp",
+      href: "/msp",
+      icon: "🩺",
+    }]
+  }
+
+  // Signal keyword?
+  if (q in SIGNAL_ALIASES) {
+    const signal = SIGNAL_ALIASES[q]
+    return [{
+      id: `cmd:triage:signal:${signal}`,
+      category: "Commands" as const,
+      label: `Triage — ${signal}`,
+      hint: `Open /msp filtered to clients with non-zero ${signal}`,
+      href: `/msp?signal=${signal}`,
+      icon: "🩺",
+    }]
+  }
+
+  // Severity keyword?
+  if (q in SEVERITY_ALIASES) {
+    const severity = SEVERITY_ALIASES[q]
+    return [{
+      id: `cmd:triage:severity:${severity}`,
+      category: "Commands" as const,
+      label: `Triage — ${severity}`,
+      hint: `Open /msp with severity filter ${severity}`,
+      href: `/msp?severity=${severity}`,
+      icon: "🩺",
+    }]
+  }
+
+  // Otherwise treat as a client-name fuzzy match. Pull the union of
+  // Fl_Tenant.name + distinct Fl_Device.clientName (same source the
+  // /msp table renders) and substring-match.
+  const [tenants, devClients] = await Promise.all([
+    prisma.fl_Tenant.findMany({ select: { name: true } }),
+    prisma.fl_Device.findMany({
+      where: { isActive: true },
+      distinct: ["clientName"],
+      select: { clientName: true },
+    }),
+  ])
+  const names = new Set<string>()
+  for (const t of tenants) names.add(t.name)
+  for (const d of devClients) names.add(d.clientName)
+
+  const matches = [...names].filter((n) => n.toLowerCase().includes(q)).slice(0, MAX_PER_VERB)
+  return matches.map((name) => {
+    const slug = clientSlug(name)
+    return {
+      id: `cmd:triage:client:${slug}`,
+      category: "Commands" as const,
+      label: `Triage — ${name}`,
+      hint: "Open /msp and scroll to this client",
+      href: `/msp#client-${slug}`,
+      icon: "🩺",
     }
   })
 }

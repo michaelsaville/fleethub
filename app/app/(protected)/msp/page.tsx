@@ -3,6 +3,7 @@ import AppShell from "@/components/AppShell"
 import { requireSession } from "@/lib/authz"
 import {
   listMspRollup,
+  clientSlug,
   SIGNAL_FILTERS,
   SEVERITY_FILTERS,
   type MspRollupClient,
@@ -62,6 +63,19 @@ export default async function MspTriagePage({
 
   return (
     <AppShell openAlertsCount={totalOpenAlerts}>
+      {/* CSS-only pulse for `triage <client>` from Cmd-K. The :target
+          pseudo-class fires when the URL hash matches a row's id, no
+          JS needed. Animation auto-decays in ~2.4s. */}
+      <style>{`
+        tr[id^="client-"]:target {
+          animation: msp-row-pulse 2.4s ease-out;
+        }
+        @keyframes msp-row-pulse {
+          0%   { background: rgba(249, 115, 22, 0.35); }
+          70%  { background: rgba(249, 115, 22, 0.08); }
+          100% { background: transparent; }
+        }
+      `}</style>
       <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
         <header
           style={{
@@ -402,7 +416,10 @@ function Row({
   const auditTone: Tone = client.auditChainStatus === "broken-here" ? "bad" : "neutral"
 
   return (
-    <tr style={{ borderTop: "0.5px solid var(--color-border-tertiary)" }}>
+    <tr
+      id={`client-${clientSlug(client.name)}`}
+      style={{ borderTop: "0.5px solid var(--color-border-tertiary)" }}
+    >
       <Td align="left">
         <Link
           href={`/clients/${enc}`}

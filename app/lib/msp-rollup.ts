@@ -13,6 +13,18 @@ import { verifyAuditChain, type AuditChainBreak } from "@/lib/audit-chain"
 // Design: docs/PHASE-6-DESIGN.md §3 (columns), §4 (risk score), §6
 // (permission), §9 (perf).
 
+// ─── Public helpers ──────────────────────────────────────────────────────
+
+/**
+ * Stable URL-safe slug for a client name, used as the row anchor on
+ * /msp (`<tr id="client-<slug>">`) and as the target of Cmd-K
+ * `triage <client>`. Lossy on punctuation; collisions are
+ * vanishingly rare at MSP scale and resolve to first-match-wins.
+ */
+export function clientSlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+}
+
 // ─── Tunables ────────────────────────────────────────────────────────────
 
 const OFFLINE_WINDOW_MS = 24 * 60 * 60 * 1000
