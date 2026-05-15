@@ -20,6 +20,7 @@ interface NavItem {
  */
 const NAV_ITEMS: NavItem[] = [
   { href: "/",         label: "Dashboard",  icon: "🏠" },
+  { href: "/msp",      label: "Triage",     icon: "🩺" },
   { href: "/clients",  label: "Clients",    icon: "🏢" },
   { href: "/devices",  label: "Devices",    icon: "💻" },
   { href: "/alerts",   label: "Alerts",     icon: "🔔" },
