@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { postAlertToSlack, postAlertToTeams } from "@/lib/webhook-delivery"
 import { sendAlertEmail } from "@/lib/m365-mail"
+import { sendAlertSms, redactPhone } from "@/lib/sms-twilio"
 import type { Fl_Alert } from "@prisma/client"
 
 // Phase 7 Workstream A step 1 — match-route-and-dispatch core.
@@ -37,7 +38,9 @@ interface ChannelConfig {
   /** Email */
   toEmails?: string[]
   ccEmails?: string[]
-  // Channel-specific fields for sms/pagerduty/ticket land in later steps.
+  /** SMS — array of E.164 phone numbers ("+14155551234"). */
+  phoneNumbers?: string[]
+  // Channel-specific fields for pagerduty/ticket land in later steps.
   [key: string]: unknown
 }
 
@@ -202,8 +205,10 @@ export async function dispatchOneChannel(
       return dispatchWebhook(alert, channel, routeId, "teams", postAlertToTeams, escalationStep, escalateAt)
     case "email":
       return dispatchEmail(alert, channel, routeId, escalationStep, escalateAt)
+    case "sms":
+      return dispatchSms(alert, channel, routeId, escalationStep, escalateAt)
     default:
-      // sms/pagerduty/ticket each land in later steps.
+      // pagerduty/ticket each land in later steps.
       await prisma.fl_AlertDispatch.create({
         data: {
           alertId: alert.id,
@@ -325,6 +330,69 @@ async function dispatchEmail(
         alertId: alert.id,
         routeId,
         channel: "email",
+        destination: fingerprint,
+        state: "failed",
+        escalationStep,
+        escalateAt,
+        errorReason: (err as Error).message.slice(0, 500),
+      },
+    })
+  }
+}
+
+async function dispatchSms(
+  alert: Fl_Alert,
+  channel: ChannelConfig,
+  routeId: string | null,
+  escalationStep: number,
+  escalateAt: Date | null,
+): Promise<void> {
+  const numbers = Array.isArray(channel.phoneNumbers)
+    ? channel.phoneNumbers.filter((s): s is string => typeof s === "string" && s.trim() !== "")
+    : []
+  if (numbers.length === 0) {
+    await prisma.fl_AlertDispatch.create({
+      data: {
+        alertId: alert.id,
+        routeId,
+        channel: "sms",
+        destination: "—",
+        state: "failed",
+        escalationStep,
+        escalateAt,
+        errorReason: "no phoneNumbers configured",
+      },
+    })
+    return
+  }
+  // Privacy-respecting fingerprint: recipient count + last-4 of
+  // first number. Never the raw E.164 in the audit chain.
+  const fingerprint = `${numbers.length} SMS · ${redactPhone(numbers[0])}`
+  try {
+    await sendAlertSms(numbers, {
+      id: alert.id,
+      clientName: alert.clientName,
+      kind: alert.kind,
+      severity: alert.severity,
+      title: alert.title,
+    })
+    await prisma.fl_AlertDispatch.create({
+      data: {
+        alertId: alert.id,
+        routeId,
+        channel: "sms",
+        destination: fingerprint,
+        state: "sent",
+        escalationStep,
+        escalateAt,
+      },
+    })
+  } catch (err) {
+    await prisma.fl_AlertDispatch.create({
+      data: {
+        alertId: alert.id,
+        routeId,
+        channel: "sms",
         destination: fingerprint,
         state: "failed",
         escalationStep,

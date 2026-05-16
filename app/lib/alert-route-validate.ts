@@ -14,10 +14,12 @@ interface NormalizedMatch {
 }
 
 export interface NormalizedChannel {
-  type: "slack" | "teams" | "email"
+  type: "slack" | "teams" | "email" | "sms"
   webhookUrl?: string
   toEmails?: string[]
   ccEmails?: string[]
+  /** E.164 phone numbers for sms channels. */
+  phoneNumbers?: string[]
 }
 
 export interface NormalizedEscalationStep {
@@ -42,6 +44,7 @@ export type ValidateResult =
   | { ok: false; reason: string }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const E164_RE = /^\+[1-9]\d{6,14}$/
 
 export function validateRoutePayload(body: Record<string, unknown>): ValidateResult {
   // tenantName — empty string from the form means "all tenants" (null).
@@ -159,7 +162,27 @@ function validateChannelList(
       out.push(channel)
       continue
     }
-    return { error: `${label} channel ${i + 1}: type "${String(type)}" not supported (slack | teams | email)` }
+    if (type === "sms") {
+      const numbersIn = Array.isArray(c.phoneNumbers) ? c.phoneNumbers : []
+      const phoneNumbers: string[] = []
+      for (const x of numbersIn) {
+        if (typeof x !== "string") continue
+        const trimmed = x.trim()
+        if (!E164_RE.test(trimmed)) {
+          return { error: `${label} sms channel: "${trimmed}" is not E.164 format (e.g. +14155551234)` }
+        }
+        phoneNumbers.push(trimmed)
+      }
+      if (phoneNumbers.length === 0) {
+        return { error: `${label} sms channel: at least one E.164 phone number required` }
+      }
+      if (phoneNumbers.length > 20) {
+        return { error: `${label} sms channel: max 20 phone numbers per channel` }
+      }
+      out.push({ type: "sms", phoneNumbers })
+      continue
+    }
+    return { error: `${label} channel ${i + 1}: type "${String(type)}" not supported (slack | teams | email | sms)` }
   }
   return { channels: out }
 }

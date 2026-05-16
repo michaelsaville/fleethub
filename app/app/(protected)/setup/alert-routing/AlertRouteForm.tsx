@@ -7,14 +7,15 @@ import Link from "next/link"
 // No client-side state machine beyond local form state; all
 // persistence goes through /api/admin/alert-routes.
 
-type ChannelType = "slack" | "teams" | "email"
+type ChannelType = "slack" | "teams" | "email" | "sms"
 type Severity = "critical" | "warn" | "info"
 
 interface ChannelDraft {
   type: ChannelType
   webhookUrl: string
-  toEmails: string  // comma-separated in the form
-  ccEmails: string
+  toEmails: string       // email — comma-separated
+  ccEmails: string       // email — comma-separated
+  phoneNumbers: string   // sms   — comma-separated E.164
 }
 
 interface EscalationStepDraft {
@@ -56,7 +57,7 @@ export default function AlertRouteForm({
   const [severity, setSeverity] = useState<Severity[]>(initial.severity)
   const [kindLike, setKindLike] = useState(initial.kindLike)
   const [channels, setChannels] = useState<ChannelDraft[]>(
-    initial.channels.length > 0 ? initial.channels : [{ type: "slack", webhookUrl: "", toEmails: "", ccEmails: "" }],
+    initial.channels.length > 0 ? initial.channels : [{ type: "slack", webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "" }],
   )
   const [escalation, setEscalation] = useState<EscalationStepDraft[]>(initial.escalation)
   const [dedup, setDedup] = useState(initial.dedupWindowMin)
@@ -73,7 +74,7 @@ export default function AlertRouteForm({
   }
 
   function addChannel(type: ChannelType) {
-    setChannels((prev) => [...prev, { type, webhookUrl: "", toEmails: "", ccEmails: "" }])
+    setChannels((prev) => [...prev, { type, webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "" }])
   }
 
   function updateChannel(i: number, patch: Partial<ChannelDraft>) {
@@ -87,7 +88,7 @@ export default function AlertRouteForm({
   function addEscalationStep() {
     setEscalation((prev) => [
       ...prev,
-      { afterMin: prev.length === 0 ? 5 : 10, channels: [{ type: "slack", webhookUrl: "", toEmails: "", ccEmails: "" }] },
+      { afterMin: prev.length === 0 ? 5 : 10, channels: [{ type: "slack", webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "" }] },
     ])
   }
   function removeEscalationStep(i: number) {
@@ -98,7 +99,7 @@ export default function AlertRouteForm({
   }
   function addStepChannel(stepIdx: number, type: ChannelType) {
     updateEscalationStep(stepIdx, {
-      channels: [...escalation[stepIdx].channels, { type, webhookUrl: "", toEmails: "", ccEmails: "" }],
+      channels: [...escalation[stepIdx].channels, { type, webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "" }],
     })
   }
   function updateStepChannel(stepIdx: number, chIdx: number, patch: Partial<ChannelDraft>) {
@@ -119,6 +120,12 @@ export default function AlertRouteForm({
     const serializeChannel = (c: ChannelDraft) => {
       if (c.type === "slack" || c.type === "teams") {
         return { type: c.type, webhookUrl: c.webhookUrl.trim() }
+      }
+      if (c.type === "sms") {
+        return {
+          type: "sms" as const,
+          phoneNumbers: c.phoneNumbers.split(",").map((s) => s.trim()).filter(Boolean),
+        }
       }
       return {
         type: "email" as const,
@@ -224,6 +231,7 @@ export default function AlertRouteForm({
           <AddButton onClick={() => addChannel("slack")}>+ Slack</AddButton>
           <AddButton onClick={() => addChannel("teams")}>+ Teams</AddButton>
           <AddButton onClick={() => addChannel("email")}>+ Email</AddButton>
+          <AddButton onClick={() => addChannel("sms")}>+ SMS</AddButton>
         </div>
       </Section>
 
@@ -285,6 +293,7 @@ export default function AlertRouteForm({
               <AddButton onClick={() => addStepChannel(stepIdx, "slack")}>+ Slack</AddButton>
               <AddButton onClick={() => addStepChannel(stepIdx, "teams")}>+ Teams</AddButton>
               <AddButton onClick={() => addStepChannel(stepIdx, "email")}>+ Email</AddButton>
+              <AddButton onClick={() => addStepChannel(stepIdx, "sms")}>+ SMS</AddButton>
             </div>
           </div>
         ))}
@@ -349,6 +358,14 @@ function ChannelRow({
           value={channel.webhookUrl}
           onChange={(e) => onChange({ webhookUrl: e.target.value })}
           placeholder={channel.type === "slack" ? "https://hooks.slack.com/services/..." : "https://*.webhook.office.com/..."}
+          style={{ ...FIELD_STYLE, flex: 1 }}
+        />
+      ) : channel.type === "sms" ? (
+        <input
+          type="text"
+          value={channel.phoneNumbers}
+          onChange={(e) => onChange({ phoneNumbers: e.target.value })}
+          placeholder="+14155551234, +14155555678 (E.164 only)"
           style={{ ...FIELD_STYLE, flex: 1 }}
         />
       ) : (
