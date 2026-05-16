@@ -7,7 +7,7 @@ import Link from "next/link"
 // No client-side state machine beyond local form state; all
 // persistence goes through /api/admin/alert-routes.
 
-type ChannelType = "slack" | "teams" | "email" | "sms" | "pagerduty"
+type ChannelType = "slack" | "teams" | "email" | "sms" | "pagerduty" | "ticket"
 type Severity = "critical" | "warn" | "info"
 
 interface ChannelDraft {
@@ -131,6 +131,9 @@ export default function AlertRouteForm({
       if (c.type === "pagerduty") {
         return { type: "pagerduty" as const, integrationKey: c.integrationKey.trim() }
       }
+      if (c.type === "ticket") {
+        return { type: "ticket" as const }
+      }
       return {
         type: "email" as const,
         toEmails: c.toEmails.split(",").map((s) => s.trim()).filter(Boolean),
@@ -237,6 +240,7 @@ export default function AlertRouteForm({
           <AddButton onClick={() => addChannel("email")}>+ Email</AddButton>
           <AddButton onClick={() => addChannel("sms")}>+ SMS</AddButton>
           <AddButton onClick={() => addChannel("pagerduty")}>+ PagerDuty</AddButton>
+          <AddButton onClick={() => addChannel("ticket")}>+ TicketHub</AddButton>
         </div>
       </Section>
 
@@ -300,6 +304,7 @@ export default function AlertRouteForm({
               <AddButton onClick={() => addStepChannel(stepIdx, "email")}>+ Email</AddButton>
               <AddButton onClick={() => addStepChannel(stepIdx, "sms")}>+ SMS</AddButton>
               <AddButton onClick={() => addStepChannel(stepIdx, "pagerduty")}>+ PagerDuty</AddButton>
+              <AddButton onClick={() => addStepChannel(stepIdx, "ticket")}>+ TicketHub</AddButton>
             </div>
           </div>
         ))}
@@ -382,6 +387,10 @@ function ChannelRow({
           placeholder="Events API v2 integration key (32 hex chars)"
           style={{ ...FIELD_STYLE, flex: 1, fontFamily: "ui-monospace, SFMono-Regular, monospace" }}
         />
+      ) : channel.type === "ticket" ? (
+        <span style={{ flex: 1, fontSize: 12, color: "var(--color-text-muted)" }}>
+          Auto-creates a TicketHub ticket. Priority + board are derived from severity + kind on the TH side. Idempotent per alert.id.
+        </span>
       ) : (
         <div style={{ display: "flex", gap: 6, flex: 1 }}>
           <input

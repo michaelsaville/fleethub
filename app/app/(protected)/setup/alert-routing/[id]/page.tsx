@@ -27,7 +27,7 @@ interface StoredEscalationStep {
 
 function hydrateChannel(c: StoredChannel) {
   return {
-    type: c.type as "slack" | "teams" | "email" | "sms" | "pagerduty",
+    type: c.type as "slack" | "teams" | "email" | "sms" | "pagerduty" | "ticket",
     webhookUrl: c.webhookUrl ?? "",
     toEmails: (c.toEmails ?? []).join(", "),
     ccEmails: (c.ccEmails ?? []).join(", "),
@@ -64,7 +64,7 @@ export default async function EditAlertRoutePage({
   }
 
   const channels = parsedChannels
-    .filter((c) => c.type === "slack" || c.type === "teams" || c.type === "email" || c.type === "sms" || c.type === "pagerduty")
+    .filter((c) => c.type === "slack" || c.type === "teams" || c.type === "email" || c.type === "sms" || c.type === "pagerduty" || c.type === "ticket")
     .map(hydrateChannel)
 
   let parsedEscalation: StoredEscalationStep[] = []
@@ -76,7 +76,7 @@ export default async function EditAlertRoutePage({
     .map((s) => ({
       afterMin: s.afterMin!,
       channels: (s.channels ?? [])
-        .filter((c) => c.type === "slack" || c.type === "teams" || c.type === "email" || c.type === "sms" || c.type === "pagerduty")
+        .filter((c) => c.type === "slack" || c.type === "teams" || c.type === "email" || c.type === "sms" || c.type === "pagerduty" || c.type === "ticket")
         .map(hydrateChannel),
     }))
 

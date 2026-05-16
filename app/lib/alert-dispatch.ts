@@ -5,6 +5,7 @@ import { postAlertToSlack, postAlertToTeams } from "@/lib/webhook-delivery"
 import { sendAlertEmail } from "@/lib/m365-mail"
 import { sendAlertSms, redactPhone } from "@/lib/sms-twilio"
 import { sendAlertToPagerDuty, redactPdKey } from "@/lib/pagerduty"
+import { createAutoTicket } from "@/lib/auto-ticket"
 import type { Fl_Alert } from "@prisma/client"
 
 // Phase 7 Workstream A step 1 — match-route-and-dispatch core.
@@ -214,8 +215,10 @@ export async function dispatchOneChannel(
       return dispatchSms(alert, channel, routeId, escalationStep, escalateAt)
     case "pagerduty":
       return dispatchPagerDuty(alert, channel, routeId, escalationStep, escalateAt)
+    case "ticket":
+      return dispatchTicket(alert, routeId, escalationStep, escalateAt)
     default:
-      // ticket lands in step 7.
+      // (no remaining unimplemented channel types as of step 7.)
       await prisma.fl_AlertDispatch.create({
         data: {
           alertId: alert.id,
@@ -462,6 +465,63 @@ async function dispatchPagerDuty(
         routeId,
         channel: "pagerduty",
         destination: fingerprint,
+        state: "failed",
+        escalationStep,
+        escalateAt,
+        errorReason: (err as Error).message.slice(0, 500),
+      },
+    })
+  }
+}
+
+async function dispatchTicket(
+  alert: Fl_Alert,
+  routeId: string | null,
+  escalationStep: number,
+  escalateAt: Date | null,
+): Promise<void> {
+  // Ticket channel has no per-route configuration in v1; the TH
+  // side decides board + priority from severity + kind. (Adding
+  // a board override is a clean follow-up if operators ask.)
+  // Resolve the device's hostname for context — saves the TH
+  // ticket reader a cross-app round-trip.
+  let hostname: string | null = null
+  if (alert.deviceId) {
+    const d = await prisma.fl_Device.findUnique({
+      where: { id: alert.deviceId },
+      select: { hostname: true },
+    })
+    hostname = d?.hostname ?? null
+  }
+  try {
+    const ticket = await createAutoTicket({
+      alertId: alert.id,
+      clientName: alert.clientName,
+      deviceId: alert.deviceId,
+      hostname,
+      kind: alert.kind,
+      severity: alert.severity,
+      title: alert.title,
+    })
+    await prisma.fl_AlertDispatch.create({
+      data: {
+        alertId: alert.id,
+        routeId,
+        channel: "ticket",
+        destination: `TH #${ticket.ticketNumber}${ticket.created ? "" : " (existing)"}`,
+        state: "sent",
+        escalationStep,
+        escalateAt,
+        externalId: ticket.ticketId,
+      },
+    })
+  } catch (err) {
+    await prisma.fl_AlertDispatch.create({
+      data: {
+        alertId: alert.id,
+        routeId,
+        channel: "ticket",
+        destination: "—",
         state: "failed",
         escalationStep,
         escalateAt,

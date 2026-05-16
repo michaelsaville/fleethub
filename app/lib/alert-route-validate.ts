@@ -14,7 +14,7 @@ interface NormalizedMatch {
 }
 
 export interface NormalizedChannel {
-  type: "slack" | "teams" | "email" | "sms" | "pagerduty"
+  type: "slack" | "teams" | "email" | "sms" | "pagerduty" | "ticket"
   webhookUrl?: string
   toEmails?: string[]
   ccEmails?: string[]
@@ -198,7 +198,13 @@ function validateChannelList(
       out.push({ type: "pagerduty", integrationKey: key })
       continue
     }
-    return { error: `${label} channel ${i + 1}: type "${String(type)}" not supported (slack | teams | email | sms | pagerduty)` }
+    if (type === "ticket") {
+      // No per-channel config in v1 — TH derives priority + board
+      // from severity + kind on the receiving side.
+      out.push({ type: "ticket" })
+      continue
+    }
+    return { error: `${label} channel ${i + 1}: type "${String(type)}" not supported (slack | teams | email | sms | pagerduty | ticket)` }
   }
   return { channels: out }
 }
