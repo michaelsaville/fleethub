@@ -24,6 +24,10 @@ export async function PATCH(
     reportLogoUrl?: string | null
     reportAccentColor?: string | null
     reportFooterText?: string | null
+    // Phase 7 Workstream C — remote control toggles. Booleans
+    // sent as true/false; absent fields leave the existing value.
+    remoteControlEnabled?: boolean
+    remoteRequiresJustification?: boolean
   }
 
   if (
@@ -44,6 +48,8 @@ export async function PATCH(
     data.reportAccentColor = body.reportAccentColor ?? "#F97316"
   }
   if (body.reportFooterText !== undefined) data.reportFooterText = body.reportFooterText
+  if (typeof body.remoteControlEnabled === "boolean") data.remoteControlEnabled = body.remoteControlEnabled
+  if (typeof body.remoteRequiresJustification === "boolean") data.remoteRequiresJustification = body.remoteRequiresJustification
 
   // Upsert because some clients don't have an Fl_Tenant row yet.
   const tenant = await prisma.fl_Tenant.upsert({
@@ -55,6 +61,8 @@ export async function PATCH(
       reportLogoUrl: true,
       reportAccentColor: true,
       reportFooterText: true,
+      remoteControlEnabled: true,
+      remoteRequiresJustification: true,
     },
   })
   return NextResponse.json({ tenant })

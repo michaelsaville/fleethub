@@ -32,6 +32,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/deployments", label: "Deployments", icon: "🚀" },
   { href: "/rings",    label: "Rings",      icon: "🎯" },
   { href: "/reports",  label: "Reports",    icon: "📊" },
+  { href: "/remote-sessions", label: "Remote",  icon: "🖥️" },
   { href: "/setup",    label: "Setup",      icon: "⚙️" },
 ]
 

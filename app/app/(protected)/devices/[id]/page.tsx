@@ -7,6 +7,10 @@ import MaintenanceModeButton from "@/components/MaintenanceModeButton"
 import { prisma } from "@/lib/prisma"
 import { getDevice, getDeviceActivity, getDeviceAlerts, getDeviceScriptRuns, listDevices, relativeLastSeen } from "@/lib/devices"
 import type { DeviceAlert, DeviceRow, DeviceScriptRun } from "@/lib/devices"
+import { getSessionContext } from "@/lib/authz"
+import RemoteSessionLauncher from "./RemoteSessionLauncher"
+import RustdeskIdEditor from "./RustdeskIdEditor"
+import { markRemoteSessionClosed } from "../../remote-sessions/actions"
 
 export const dynamic = "force-dynamic"
 
@@ -19,6 +23,7 @@ const TABS = [
   { id: "network",  label: "Network",  phase: null },
   { id: "activity", label: "Activity", phase: null },
   { id: "alerts",   label: "Alerts",   phase: null },
+  { id: "remote",   label: "Remote",   phase: null },
 ] as const
 type TabId = typeof TABS[number]["id"]
 
@@ -36,7 +41,7 @@ export default async function DeviceDetailPage({
   const device = await getDevice(id)
   if (!device) notFound()
 
-  const [alerts, activity, scriptRuns, fleet, maint] = await Promise.all([
+  const [alerts, activity, scriptRuns, fleet, maint, ctx, deviceMeta, remoteSessions] = await Promise.all([
     getDeviceAlerts(id),
     getDeviceActivity(id, 30),
     getDeviceScriptRuns(id, 20),
@@ -47,7 +52,28 @@ export default async function DeviceDetailPage({
         select: { maintenanceMode: true, maintenanceUntil: true, maintenanceReason: true },
       })
       .catch(() => null),
+    getSessionContext(),
+    prisma.fl_Device.findUnique({ where: { id }, select: { rustdeskId: true, clientName: true } }),
+    prisma.fl_RemoteSession.findMany({
+      where: { deviceId: id },
+      orderBy: { createdAt: "desc" },
+      take: 30,
+      select: {
+        id: true, state: true, operatorEmail: true, justification: true,
+        startedAt: true, endedAt: true, assertedClose: true,
+        rustdeskSessionId: true, bytesTransferred: true,
+      },
+    }),
   ])
+  // Resolve the tenant separately since it depends on deviceMeta.
+  const tenantRow = deviceMeta
+    ? await prisma.fl_Tenant.findUnique({
+        where: { name: deviceMeta.clientName },
+        select: { remoteControlEnabled: true, remoteRequiresJustification: true },
+      })
+    : null
+  const remoteEnabled = tenantRow?.remoteControlEnabled ?? true
+  const requiresJust = tenantRow?.remoteRequiresJustification ?? false
   const fleetSize = fleet.rows.length
   const fleetAppCounts = new Map<string, number>()
   for (const d of fleet.rows) {
@@ -69,6 +95,12 @@ export default async function DeviceDetailPage({
             until: maint?.maintenanceUntil ? maint.maintenanceUntil.toISOString() : null,
             reason: maint?.maintenanceReason ?? null,
           }}
+          remote={{
+            rustdeskId: deviceMeta?.rustdeskId ?? null,
+            enabled: remoteEnabled,
+            requiresJustification: requiresJust,
+            canOpen: !!ctx,
+          }}
         />
         <TabNav active={tab} deviceId={device.id} />
         {tab === "summary"  && <SummaryTab device={device} alerts={alerts} />}
@@ -79,6 +111,14 @@ export default async function DeviceDetailPage({
         {tab === "scripts"  && <ScriptsTab runs={scriptRuns} />}
         {tab === "software" && <SoftwareTab device={device} fleetSize={fleetSize} fleetAppCounts={fleetAppCounts} />}
         {tab === "network"  && <NetworkTab device={device} />}
+        {tab === "remote"   && <RemoteTab
+            device={device}
+            isAdmin={ctx?.role === "ADMIN"}
+            currentRustdeskId={deviceMeta?.rustdeskId ?? null}
+            tenantEnabled={remoteEnabled}
+            requiresJustification={requiresJust}
+            sessions={remoteSessions}
+          />}
       </div>
     </AppShell>
   )
@@ -171,15 +211,17 @@ function Pill({ text, mono }: { text: string; mono?: boolean }) {
 function ActionBar({
   deviceId,
   maintenance,
+  remote,
 }: {
   deviceId: string
   maintenance: { on: boolean; until: string | null; reason: string | null }
+  remote: { rustdeskId: string | null; enabled: boolean; requiresJustification: boolean; canOpen: boolean }
 }) {
   // Per UI-PATTERNS.md #1: "Big visible action bar at the top." Phase 3
-  // ships Maintenance Mode as the first live action; the rest still
-  // phase-tooltipped until their feature ships.
+  // ships Maintenance Mode as the first live action; Phase 7 ships
+  // Remote. The rest are still phase-tooltipped until their feature
+  // ships.
   const actions = [
-    { label: "Remote",     phase: "Phase 4" },
     { label: "Quick Job",  phase: "Phase 2" },
     { label: "Patch Now",  phase: "Phase 4" },
     { label: "Reboot",     phase: "Phase 2" },
@@ -204,6 +246,13 @@ function ActionBar({
         isOn={maintenance.on}
         until={maintenance.until}
         reason={maintenance.reason}
+      />
+      <RemoteSessionLauncher
+        deviceId={deviceId}
+        rustdeskId={remote.rustdeskId}
+        remoteControlEnabled={remote.enabled}
+        requiresJustification={remote.requiresJustification}
+        canOpen={remote.canOpen}
       />
       {actions.map((a) => (
         <button
@@ -874,4 +923,152 @@ const tdStyle: React.CSSProperties = {
   padding: "6px 8px",
   color: "var(--color-text-primary)",
   verticalAlign: "top",
+}
+
+// ─── Remote tab ──────────────────────────────────────────────────────────
+
+interface RemoteSessionRow {
+  id: string
+  state: string
+  operatorEmail: string
+  justification: string | null
+  startedAt: Date | null
+  endedAt: Date | null
+  assertedClose: boolean
+  rustdeskSessionId: string | null
+  bytesTransferred: bigint | null
+}
+
+function RemoteTab({
+  device,
+  isAdmin,
+  currentRustdeskId,
+  tenantEnabled,
+  requiresJustification,
+  sessions,
+}: {
+  device: DeviceRow
+  isAdmin: boolean
+  currentRustdeskId: string | null
+  tenantEnabled: boolean
+  requiresJustification: boolean
+  sessions: RemoteSessionRow[]
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+      <section style={{ padding: "12px 14px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+        <h2 style={{ fontSize: 12, fontWeight: 600, margin: 0, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          RustDesk configuration
+        </h2>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12.5 }}>
+          <div>
+            <span style={{ color: "var(--color-text-muted)" }}>Tenant remote control: </span>
+            <strong style={{ color: tenantEnabled ? "var(--color-success, #15803d)" : "var(--color-text-muted)" }}>
+              {tenantEnabled ? "enabled" : "disabled"}
+            </strong>
+          </div>
+          <div>
+            <span style={{ color: "var(--color-text-muted)" }}>Justification required: </span>
+            <strong>{requiresJustification ? "yes" : "no"}</strong>
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 4 }}>
+            RustDesk peer ID
+          </div>
+          {isAdmin ? (
+            <RustdeskIdEditor deviceId={device.id} current={currentRustdeskId} />
+          ) : (
+            <span style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 13 }}>
+              {currentRustdeskId ?? <span style={{ color: "var(--color-text-muted)" }}>not set</span>}
+            </span>
+          )}
+        </div>
+      </section>
+
+      <h2 style={{ fontSize: 13, fontWeight: 600, margin: 0, letterSpacing: "-0.01em" }}>
+        Session history ({sessions.length}{sessions.length === 30 ? "+" : ""})
+      </h2>
+      {sessions.length === 0 ? (
+        <div style={{ padding: "30px", textAlign: "center", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 10, color: "var(--color-text-muted)", fontSize: 13 }}>
+          No remote sessions to this device yet. Click <strong>Remote in</strong> at the top of the page to start one.
+        </div>
+      ) : (
+        <div style={{ background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 10, overflowX: "auto" }}>
+          <table style={{ width: "100%", minWidth: 760, borderCollapse: "collapse", fontSize: "12.5px" }}>
+            <thead>
+              <tr style={{ background: "var(--color-background-tertiary, rgba(148, 163, 184, 0.08))" }}>
+                <th style={{ ...thStyle, textAlign: "left" }}>Started</th>
+                <th style={{ ...thStyle, textAlign: "left" }}>Operator</th>
+                <th style={{ ...thStyle, textAlign: "center" }}>State</th>
+                <th style={{ ...thStyle, textAlign: "left" }}>Justification</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Bytes</th>
+                <th style={{ ...thStyle, textAlign: "left" }}>Close</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sessions.map((s) => (
+                <tr key={s.id} style={{ borderTop: "0.5px solid var(--color-border-tertiary)" }}>
+                  <td style={tdStyle}>
+                    {s.startedAt ? relativeLastSeen(s.startedAt) : "—"}
+                    <br />
+                    <span style={{ fontSize: 10.5, color: "var(--color-text-muted)" }}>
+                      {s.startedAt?.toISOString().slice(0, 16).replace("T", " ")}
+                    </span>
+                  </td>
+                  <td style={tdStyle}>{s.operatorEmail}</td>
+                  <td style={{ ...tdStyle, textAlign: "center" }}>{remoteSessionStateChip(s.state)}</td>
+                  <td style={tdStyle}>
+                    {s.justification
+                      ? <span style={{ color: "var(--color-text-primary)" }}>{s.justification}</span>
+                      : <span style={{ color: "var(--color-text-muted)" }}>—</span>}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: "right", fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>
+                    {s.bytesTransferred != null ? humanBytes(Number(s.bytesTransferred)) : <span style={{ color: "var(--color-text-muted)" }}>—</span>}
+                  </td>
+                  <td style={tdStyle}>
+                    {s.state === "in-progress" ? (
+                      <form action={markRemoteSessionClosed}>
+                        <input type="hidden" name="sessionId" value={s.id} />
+                        <button type="submit" style={{ padding: "3px 9px", fontSize: 11, color: "var(--color-text-secondary)", background: "var(--color-background-primary, #fff)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, cursor: "pointer" }}>
+                          Mark closed
+                        </button>
+                      </form>
+                    ) : (
+                      <span style={{ color: "var(--color-text-muted)", fontSize: 11 }}>
+                        {s.endedAt ? `${relativeLastSeen(s.endedAt)}${s.assertedClose ? " (operator)" : " (rustdesk)"}` : "—"}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function remoteSessionStateChip(state: string): React.ReactNode {
+  const map: Record<string, { color: string; bg: string }> = {
+    "in-progress": { color: "var(--color-success, #15803d)", bg: "var(--color-success-soft, rgba(21, 128, 61, 0.15))" },
+    closed:        { color: "var(--color-text-muted)", bg: "var(--color-background-tertiary, rgba(148, 163, 184, 0.18))" },
+    expired:       { color: "var(--color-warning, #b45309)", bg: "var(--color-warning-soft, rgba(234, 179, 8, 0.1))" },
+    revoked:       { color: "var(--color-danger, #b91c1c)", bg: "var(--color-danger-soft, rgba(239, 68, 68, 0.1))" },
+    issued:        { color: "var(--color-text-secondary)", bg: "var(--color-background-tertiary, rgba(148, 163, 184, 0.18))" },
+  }
+  const tone = map[state] ?? map.closed
+  return (
+    <span style={{ padding: "1px 8px", fontSize: 10, fontWeight: 600, borderRadius: 999, background: tone.bg, color: tone.color, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>
+      {state}
+    </span>
+  )
+}
+
+function humanBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
