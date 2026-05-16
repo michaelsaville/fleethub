@@ -42,7 +42,9 @@ export default async function RunbookDetailPage({
         alertKind: true,
         scheduledAt: true,
         state: true,
+        dryRunScriptRunId: true,
         realScriptRunId: true,
+        predicateOutcome: true,
         failureReason: true,
         createdAt: true,
         completedAt: true,
@@ -198,17 +200,24 @@ export default async function RunbookDetailPage({
                       </Td>
                       <Td align="center">{fireStateChip(f.state)}</Td>
                       <Td align="left">
-                        {f.realScriptRunId ? (
-                          <Link href={`/runs/${f.realScriptRunId}`} style={{ color: "var(--color-accent, #F97316)", fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 11 }}>
-                            {f.realScriptRunId.slice(0, 8)}…
-                          </Link>
-                        ) : (
-                          <span style={{ color: "var(--color-text-muted)" }}>—</span>
-                        )}
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                          {f.dryRunScriptRunId && (
+                            <Link href={`/runs/${f.dryRunScriptRunId}`} style={{ color: "var(--color-text-muted)", fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 11 }}>
+                              {f.dryRunScriptRunId.slice(0, 8)}… <span style={{ fontSize: 9.5 }}>(dry)</span>
+                            </Link>
+                          )}
+                          {f.realScriptRunId ? (
+                            <Link href={`/runs/${f.realScriptRunId}`} style={{ color: "var(--color-accent, #F97316)", fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 11 }}>
+                              {f.realScriptRunId.slice(0, 8)}… <span style={{ fontSize: 9.5 }}>(real)</span>
+                            </Link>
+                          ) : (
+                            !f.dryRunScriptRunId && <span style={{ color: "var(--color-text-muted)" }}>—</span>
+                          )}
+                        </div>
                       </Td>
                       <Td align="left">
                         <span style={{ color: "var(--color-text-muted)", fontSize: 11 }}>
-                          {f.failureReason ?? (f.state === "pending" ? `scheduled ${relativeLastSeen(f.scheduledAt)}` : "")}
+                          {f.failureReason ?? (f.state === "pending" ? `scheduled ${relativeLastSeen(f.scheduledAt)}` : f.predicateOutcome ? `predicate ${f.predicateOutcome}` : "")}
                         </span>
                       </Td>
                     </tr>

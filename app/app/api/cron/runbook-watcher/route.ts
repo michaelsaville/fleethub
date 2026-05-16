@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { tripRunbook } from "@/lib/runbook-evaluator"
+import { evaluatePredicate } from "@/lib/runbook-predicate"
+import { runScript } from "@/lib/script-commands"
 
 // Phase 7 Workstream B step 4 — runbook watcher cron.
 //
@@ -37,28 +39,46 @@ async function run(req: NextRequest): Promise<NextResponse> {
   }
 
   const now = new Date()
-  const running = await prisma.fl_RunbookFire.findMany({
-    where: { state: "running", realScriptRunId: { not: null } },
+  const pending = await prisma.fl_RunbookFire.findMany({
+    where: {
+      state: { in: ["dry-run", "running"] },
+      OR: [{ dryRunScriptRunId: { not: null } }, { realScriptRunId: { not: null } }],
+    },
     orderBy: { createdAt: "asc" },
     take: BATCH,
     select: {
       id: true,
       runbookId: true,
       deviceId: true,
+      state: true,
+      dryRunScriptRunId: true,
       realScriptRunId: true,
     },
   })
 
   let succeeded = 0
   let failed = 0
+  let predicatePassed = 0
+  let predicateFailed = 0
   let tripped = 0
   const errors: string[] = []
   // Group by runbookId so per-runbook trip check runs at most once
   // per tick regardless of how many fires landed in this batch.
   const runbooksToCheck = new Set<string>()
 
-  for (const f of running) {
+  for (const f of pending) {
     try {
+      if (f.state === "dry-run") {
+        const result = await advanceDryRun(f)
+        if (result === "advanced-to-running") predicatePassed++
+        else if (result === "predicate-failed") predicateFailed++
+        else if (result === "dry-failed") {
+          failed++
+          runbooksToCheck.add(f.runbookId)
+        }
+        continue
+      }
+      // state === "running"
       const runRow = await prisma.fl_ScriptRun.findUnique({
         where: { id: f.realScriptRunId! },
         select: { state: true, exitCode: true, finishedAt: true },
@@ -100,9 +120,11 @@ async function run(req: NextRequest): Promise<NextResponse> {
     action: "runbook.watcher.tick",
     outcome: errors.length === 0 ? "ok" : "error",
     detail: {
-      examined: running.length,
+      examined: pending.length,
       succeeded,
       failed,
+      predicatePassed,
+      predicateFailed,
       tripped,
       errors: errors.length,
     },
@@ -110,12 +132,119 @@ async function run(req: NextRequest): Promise<NextResponse> {
 
   return NextResponse.json({
     sweptAt: now.toISOString(),
-    examined: running.length,
+    examined: pending.length,
     succeeded,
     failed,
+    predicatePassed,
+    predicateFailed,
     tripped,
     errors,
   })
+}
+
+type DryRunOutcome = "advanced-to-running" | "predicate-failed" | "dry-failed" | "still-waiting"
+
+/**
+ * Advance an Fl_RunbookFire that's in state="dry-run" once its
+ * linked Fl_ScriptRun reaches a terminal state. Three branches:
+ *  - dry-run errored → fire fails, returns "dry-failed".
+ *  - dry-run ok + predicate passes → enqueue real run via
+ *    runScript(); transition to state="running" with realScriptRunId.
+ *  - dry-run ok + predicate fails → terminal state="predicate-failed".
+ */
+async function advanceDryRun(f: {
+  id: string
+  runbookId: string
+  deviceId: string
+  dryRunScriptRunId: string | null
+  realScriptRunId: string | null
+}): Promise<DryRunOutcome> {
+  if (!f.dryRunScriptRunId) return "still-waiting"
+  const dryRun = await prisma.fl_ScriptRun.findUnique({
+    where: { id: f.dryRunScriptRunId },
+    select: { state: true, exitCode: true, output: true, finishedAt: true },
+  })
+  if (!dryRun || !SCRIPT_TERMINAL_STATES.has(dryRun.state)) return "still-waiting"
+
+  if (dryRun.state !== "ok") {
+    await prisma.fl_RunbookFire.update({
+      where: { id: f.id },
+      data: {
+        state: "failed",
+        completedAt: dryRun.finishedAt ?? new Date(),
+        predicateOutcome: "skip",
+        failureReason: `dry-run failed (state=${dryRun.state}, exit=${dryRun.exitCode ?? "—"})`,
+      },
+    })
+    return "dry-failed"
+  }
+
+  // Dry-run succeeded — evaluate the predicate.
+  const runbook = await prisma.fl_Runbook.findUnique({
+    where: { id: f.runbookId },
+    select: { scriptId: true, dryRunPredicateJson: true, isActive: true, isTripped: true },
+  })
+  if (!runbook || !runbook.isActive || runbook.isTripped) {
+    await prisma.fl_RunbookFire.update({
+      where: { id: f.id },
+      data: {
+        state: "predicate-failed",
+        completedAt: new Date(),
+        predicateOutcome: "skip",
+        failureReason: !runbook ? "runbook deleted" : runbook.isTripped ? "runbook tripped between dry-run and decision" : "runbook disabled between dry-run and decision",
+      },
+    })
+    return "predicate-failed"
+  }
+
+  const result = evaluatePredicate(runbook.dryRunPredicateJson, {
+    state: dryRun.state,
+    exitCode: dryRun.exitCode,
+    output: dryRun.output,
+  })
+
+  if (!result.pass) {
+    await prisma.fl_RunbookFire.update({
+      where: { id: f.id },
+      data: {
+        state: "predicate-failed",
+        completedAt: new Date(),
+        predicateOutcome: "fail",
+        failureReason: result.reason,
+      },
+    })
+    return "predicate-failed"
+  }
+
+  // Predicate passed — enqueue the real run.
+  try {
+    const real = await runScript({
+      scriptId: runbook.scriptId,
+      deviceId: f.deviceId,
+      initiatedBy: `runbook:${f.runbookId}`,
+      dryRun: false,
+    })
+    await prisma.fl_RunbookFire.update({
+      where: { id: f.id },
+      data: {
+        state: "running",
+        predicateOutcome: "pass",
+        realScriptRunId: real.id,
+      },
+    })
+    return "advanced-to-running"
+  } catch (err) {
+    await prisma.fl_RunbookFire.update({
+      where: { id: f.id },
+      data: {
+        state: "failed",
+        completedAt: new Date(),
+        predicateOutcome: "pass",
+        failureReason: `real run enqueue failed: ${(err as Error).message.slice(0, 300)}`,
+      },
+    })
+    return "dry-failed"
+  }
 }
 
 /**

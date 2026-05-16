@@ -78,7 +78,13 @@ async function run(req: NextRequest): Promise<NextResponse> {
 
       const runbook = await prisma.fl_Runbook.findUnique({
         where: { id: f.runbookId },
-        select: { scriptId: true, isActive: true, isTripped: true },
+        select: {
+          scriptId: true,
+          isActive: true,
+          isTripped: true,
+          dryRunFirst: true,
+          script: { select: { dryRunCapable: true } },
+        },
       })
       if (!runbook || !runbook.isActive || runbook.isTripped) {
         await prisma.fl_RunbookFire.update({
@@ -98,21 +104,35 @@ async function run(req: NextRequest): Promise<NextResponse> {
 
       // Phase 2 runScript() honors maintenance mode + dry-run gates
       // + audit chain. Runbooks pipe in here without bypassing any
-      // of that. v1 step 1 hardcodes dryRun=false; step 5 wires the
-      // dryRunFirst flow.
+      // of that. Step 5 wires the dryRunFirst flow: when the script
+      // is dry-run capable AND the runbook opts in, queue a
+      // dryRun=true first; the watcher (step 4 lib) evaluates the
+      // predicate and enqueues the real run if it passes.
+      const willDryRun = runbook.dryRunFirst && runbook.script.dryRunCapable
       const scriptRun = await runScript({
         scriptId: runbook.scriptId,
         deviceId: f.deviceId,
         initiatedBy: `runbook:${f.runbookId}`,
-        dryRun: false,
+        dryRun: willDryRun,
       })
-      await prisma.fl_RunbookFire.update({
-        where: { id: f.id },
-        data: {
-          state: "running",
-          realScriptRunId: scriptRun.id,
-        },
-      })
+      if (willDryRun) {
+        await prisma.fl_RunbookFire.update({
+          where: { id: f.id },
+          data: {
+            state: "dry-run",
+            dryRunScriptRunId: scriptRun.id,
+          },
+        })
+      } else {
+        await prisma.fl_RunbookFire.update({
+          where: { id: f.id },
+          data: {
+            state: "running",
+            realScriptRunId: scriptRun.id,
+            predicateOutcome: runbook.dryRunFirst ? "skip" : null,
+          },
+        })
+      }
       fired++
     } catch (err) {
       errors.push(`${f.id}: ${(err as Error).message}`)
