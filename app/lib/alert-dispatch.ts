@@ -7,6 +7,7 @@ import { sendAlertSms, redactPhone } from "@/lib/sms-twilio"
 import { sendAlertToPagerDuty, redactPdKey } from "@/lib/pagerduty"
 import { createAutoTicket } from "@/lib/auto-ticket"
 import { resolveCurrentOncall } from "@/lib/oncall"
+import { ackUrl } from "@/lib/alert-ack-token"
 import type { Fl_Alert } from "@prisma/client"
 
 // Phase 7 Workstream A step 1 — match-route-and-dispatch core.
@@ -598,6 +599,103 @@ async function dispatchTicket(
   }
 }
 
+/**
+ * Mark an alert acked + cascade to its open dispatches. Used by
+ * the in-app server action and the signed-link ack URL — single
+ * source of truth for "what happens on ack" so the two paths
+ * can't drift.
+ *
+ * Idempotent: re-acking an already-acked alert is a no-op (the
+ * cascade still runs in case dispatches were missed by an earlier
+ * call against an older alert-dispatcher version).
+ */
+export async function markAlertAcked(alertId: string, actor: string): Promise<{
+  alreadyAcked: boolean
+}> {
+  const alert = await prisma.fl_Alert.findUnique({
+    where: { id: alertId },
+    select: { id: true, state: true, clientName: true, deviceId: true, kind: true, severity: true },
+  })
+  if (!alert) throw new Error(`alert ${alertId} not found`)
+
+  const alreadyAcked = alert.state !== "open"
+  const now = new Date()
+  if (!alreadyAcked) {
+    await writeAudit({
+      actorEmail: actor,
+      clientName: alert.clientName,
+      deviceId: alert.deviceId,
+      action: "alert.ack",
+      outcome: "ok",
+      detail: { alertId, kind: alert.kind, severity: alert.severity },
+    })
+    await prisma.fl_Alert.update({
+      where: { id: alertId },
+      data: { state: "ack", ackedBy: actor, ackedAt: now },
+    })
+  }
+
+  // Cascade: any dispatch row still waiting to escalate gets
+  // ackedAt + state=acked + escalateAt cleared so the cron stops
+  // chasing it. Run even for already-acked alerts so legacy rows
+  // get repaired.
+  await prisma.fl_AlertDispatch.updateMany({
+    where: {
+      alertId,
+      OR: [{ ackedAt: null }, { escalateAt: { not: null } }],
+    },
+    data: { ackedAt: now, ackedBy: actor, state: "acked", escalateAt: null },
+  })
+
+  return { alreadyAcked }
+}
+
+/**
+ * Force-fire the next escalation step on demand (Cmd-K
+ * `escalate <id>` or a "Force escalate" button). Finds the
+ * latest dispatch step for the alert and runs the same
+ * escalateOne logic the cron would have run at escalateAt.
+ *
+ * Returns the new step number if escalation fired, null when
+ * there's no next step (chain exhausted or no route).
+ */
+export async function forceEscalate(alertId: string): Promise<{
+  status: "escalated" | "exhausted" | "no-dispatch" | "stopped"
+  toStep?: number
+}> {
+  // Latest dispatch row for this alert by escalationStep DESC.
+  const last = await prisma.fl_AlertDispatch.findFirst({
+    where: { alertId },
+    orderBy: [{ escalationStep: "desc" }, { createdAt: "desc" }],
+    select: { id: true, escalationStep: true, routeId: true },
+  })
+  if (!last) return { status: "no-dispatch" }
+  if (!last.routeId) return { status: "exhausted" }
+  const route = await prisma.fl_AlertRoute.findUnique({
+    where: { id: last.routeId },
+    select: { escalationJson: true, isActive: true },
+  })
+  if (!route || !route.isActive) return { status: "stopped" }
+  const chain = parseEscalationChain(route.escalationJson)
+  const nextIndex = last.escalationStep
+  if (nextIndex >= chain.length) return { status: "exhausted" }
+  const alert = await prisma.fl_Alert.findUnique({ where: { id: alertId } })
+  if (!alert) return { status: "no-dispatch" }
+  if (alert.state === "ack" || alert.state === "resolved") return { status: "stopped" }
+  const followOn = chain[nextIndex + 1]
+  const nextEscalateAt = followOn ? new Date(Date.now() + followOn.afterMin * 60_000) : null
+  for (const ch of chain[nextIndex].channels) {
+    await dispatchOneChannel(alert, ch, last.routeId, nextIndex + 1, nextEscalateAt)
+  }
+  // Clear any pending escalateAt on the previous step so cron
+  // doesn't double-fire.
+  await prisma.fl_AlertDispatch.updateMany({
+    where: { alertId, escalationStep: last.escalationStep },
+    data: { escalateAt: null },
+  })
+  return { status: "escalated", toStep: nextIndex + 1 }
+}
+
 /** Public for the escalator cron + the route-create UI. */
 export function parseEscalationChain(json: string | null): EscalationStep[] {
   if (!json) return []
@@ -628,6 +726,7 @@ function buildAlertEmailHtml(alert: Fl_Alert): string {
       : "#0B6E99"
   const link = `${base}/alerts/${alert.id}`
   const deviceLink = alert.deviceId ? `${base}/devices/${alert.deviceId}` : null
+  const ack = ackUrl(alert.id)
   return `<!doctype html><html><body style="font-family:Helvetica,Arial,sans-serif;color:#0F172A;font-size:14px;line-height:1.5;">
 <p><span style="background:${sevColor};color:#fff;padding:2px 8px;border-radius:4px;font-weight:600;letter-spacing:0.05em;">${esc(sev)}</span>
 &nbsp;<strong>${esc(alert.clientName)}</strong></p>
@@ -636,7 +735,11 @@ function buildAlertEmailHtml(alert: Fl_Alert): string {
 <tr><td style="padding-right:16px;">Kind</td><td><code style="font-family:ui-monospace,SFMono-Regular,monospace;color:#0F172A;">${esc(alert.kind)}</code></td></tr>
 <tr><td style="padding-right:16px;padding-top:4px;">Device</td><td style="padding-top:4px;">${deviceLink ? `<a href="${deviceLink}" style="color:#F97316;">view in FleetHub</a>` : "—"}</td></tr>
 </table>
-<p style="margin-top:20px;"><a href="${link}" style="background:${sevColor};color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:600;">Open alert in FleetHub</a></p>
+<p style="margin-top:20px;">
+<a href="${ack}" style="background:#15803D;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:600;margin-right:8px;">Ack alert</a>
+<a href="${link}" style="background:${sevColor};color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:600;">Open in FleetHub</a>
+</p>
+<p style="font-size:11px;color:#94A3B8;margin-top:24px;">Clicking <em>Ack</em> stops the escalation chain. Anyone with this email can ack.</p>
 </body></html>`
 }
 

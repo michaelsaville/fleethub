@@ -98,6 +98,16 @@ export async function parsePaletteCommand(query: string): Promise<PaletteCommand
     return resolveTriage(tokens.slice(1).join(" "))
   }
 
+  // ack <alert-id-or-substring>
+  if (tokens[0] === "ack" && tokens.length >= 2) {
+    return resolveAck(tokens.slice(1).join(" "))
+  }
+
+  // escalate <alert-id-or-substring>
+  if (tokens[0] === "escalate" && tokens.length >= 2) {
+    return resolveEscalate(tokens.slice(1).join(" "))
+  }
+
   return []
 }
 
@@ -534,4 +544,62 @@ async function resolveTriage(rest: string): Promise<PaletteCommand[]> {
       icon: "🩺",
     }
   })
+}
+
+// ─── ack / escalate ──────────────────────────────────────────────────────
+
+async function resolveAck(rest: string): Promise<PaletteCommand[]> {
+  return resolveAlertVerb(rest, {
+    verb: "ack",
+    label: (a) => `Ack — ${a.title}`,
+    hint: (a) => `${a.severity} · ${a.clientName} · open the alert page to ack`,
+    href: (id) => `/alerts/${id}`,
+    icon: "✓",
+  })
+}
+
+async function resolveEscalate(rest: string): Promise<PaletteCommand[]> {
+  return resolveAlertVerb(rest, {
+    verb: "escalate",
+    label: (a) => `Force escalate — ${a.title}`,
+    hint: (a) => `${a.severity} · ${a.clientName} · jump the chain ahead`,
+    href: (id) => `/alerts/${id}`,
+    icon: "↑",
+  })
+}
+
+interface AlertVerbSpec {
+  verb: string
+  label: (a: { title: string; clientName: string; severity: string }) => string
+  hint: (a: { title: string; clientName: string; severity: string }) => string
+  href: (id: string) => string
+  icon: string
+}
+
+async function resolveAlertVerb(rest: string, spec: AlertVerbSpec): Promise<PaletteCommand[]> {
+  const q = rest.trim().toLowerCase()
+  if (q.length < 3) return []
+  // Match by id prefix OR by title substring. Open alerts only —
+  // acked / resolved alerts shouldn't surface in these verbs.
+  const candidates = await prisma.fl_Alert.findMany({
+    where: {
+      state: "open",
+      OR: [
+        { id: { startsWith: q } },
+        { title: { contains: q, mode: "insensitive" } },
+        { clientName: { contains: q, mode: "insensitive" } },
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+    take: MAX_PER_VERB,
+    select: { id: true, title: true, clientName: true, severity: true },
+  })
+  return candidates.map((a) => ({
+    id: `cmd:${spec.verb}:${a.id}`,
+    category: "Commands" as const,
+    label: spec.label(a),
+    hint: spec.hint(a),
+    href: spec.href(a.id),
+    icon: spec.icon,
+  }))
 }

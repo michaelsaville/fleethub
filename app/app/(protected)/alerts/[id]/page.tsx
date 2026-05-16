@@ -6,7 +6,7 @@ import SeedBanner from "@/components/SeedBanner"
 import { getAlert, getAlertActivity } from "@/lib/alerts"
 import { getSessionContext } from "@/lib/authz"
 import { relativeLastSeen } from "@/lib/devices-time"
-import { ackAlert, resolveAlert } from "../actions"
+import { ackAlert, resolveAlert, forceEscalateAction } from "../actions"
 
 export const dynamic = "force-dynamic"
 
@@ -184,6 +184,17 @@ function ActionRow({
           style={buttonStyle(canMutate && alert.state !== "resolved")}
         >
           Resolve
+        </button>
+      </form>
+      <form action={forceEscalateAction}>
+        <input type="hidden" name="id" value={alert.id} />
+        <button
+          type="submit"
+          disabled={!canMutate || alert.state !== "open"}
+          title={alert.state !== "open" ? `Already ${alert.state}` : "Skip the ack window — fire the next step of the chain now"}
+          style={buttonStyle(canMutate && alert.state === "open")}
+        >
+          Force escalate
         </button>
       </form>
       <span style={{ flex: 1 }} />

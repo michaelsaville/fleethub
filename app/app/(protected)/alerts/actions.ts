@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { requireAdmin } from "@/lib/authz"
 import { mockMode } from "@/lib/devices"
+import { markAlertAcked, forceEscalate } from "@/lib/alert-dispatch"
 
 /**
  * Mutating server actions for the /alerts list. ADMIN-gated; the audit
@@ -26,21 +27,9 @@ export async function ackAlert(formData: FormData): Promise<void> {
   if (await mockMode()) mockGuard()
   const id = formData.get("id")
   if (typeof id !== "string" || !id) throw new Error("Missing alert id")
-  const alert = await prisma.fl_Alert.findUnique({ where: { id } })
-  if (!alert) throw new Error("Alert not found")
-  if (alert.state !== "open") return
-  await writeAudit({
-    actorEmail: ctx.email,
-    clientName: alert.clientName,
-    deviceId: alert.deviceId,
-    action: "alert.ack",
-    outcome: "ok",
-    detail: { alertId: id, kind: alert.kind, severity: alert.severity },
-  })
-  await prisma.fl_Alert.update({
-    where: { id },
-    data: { state: "ack", ackedBy: ctx.email, ackedAt: new Date() },
-  })
+  // Single source of truth — also cascades to open dispatches +
+  // stops the escalation chain. See lib/alert-dispatch.ts.
+  await markAlertAcked(id, ctx.email)
   revalidatePath("/alerts")
   revalidatePath(`/alerts/${id}`)
 }
@@ -99,4 +88,25 @@ export async function bulkAckAlerts(formData: FormData): Promise<void> {
     })
   }
   revalidatePath("/alerts")
+}
+
+export async function forceEscalateAction(formData: FormData): Promise<void> {
+  const ctx = await requireAdmin()
+  if (await mockMode()) mockGuard()
+  const id = formData.get("id")
+  if (typeof id !== "string" || !id) throw new Error("Missing alert id")
+  const alert = await prisma.fl_Alert.findUnique({
+    where: { id },
+    select: { clientName: true, deviceId: true, kind: true, severity: true },
+  })
+  const result = await forceEscalate(id)
+  await writeAudit({
+    actorEmail: ctx.email,
+    clientName: alert?.clientName ?? null,
+    deviceId: alert?.deviceId ?? null,
+    action: "alert.escalate.manual",
+    outcome: result.status === "escalated" ? "ok" : "error",
+    detail: { alertId: id, ...result },
+  })
+  revalidatePath(`/alerts/${id}`)
 }

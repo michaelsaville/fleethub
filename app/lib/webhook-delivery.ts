@@ -164,6 +164,8 @@ export function isValidWebhookUrl(s: string, channel: "slack" | "teams"): boolea
 
 // ─── Phase 7 Workstream A — alert dispatch ───────────────────────────────
 
+import { ackUrl } from "@/lib/alert-ack-token"
+
 const SEVERITY_EMOJI = { critical: "🔴", warn: "🟠", info: "🔵" } as const
 
 interface AlertForDelivery {
@@ -215,9 +217,15 @@ export async function postAlertToSlack(
         elements: [
           {
             type: "button",
+            text: { type: "plain_text", text: "Ack alert" },
+            url: ackUrl(alert.id),
+            style: "primary",
+          },
+          {
+            type: "button",
             text: { type: "plain_text", text: "Open in FleetHub" },
             url: link,
-            style: alert.severity === "critical" ? "danger" : "primary",
+            style: alert.severity === "critical" ? "danger" : undefined,
           },
         ],
       },
@@ -270,6 +278,11 @@ export async function postAlertToTeams(
       },
     ],
     potentialAction: [
+      {
+        "@type": "OpenUri",
+        name: "Ack alert",
+        targets: [{ os: "default", uri: ackUrl(alert.id) }],
+      },
       {
         "@type": "OpenUri",
         name: "Open in FleetHub",
