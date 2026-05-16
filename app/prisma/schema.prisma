@@ -162,6 +162,16 @@ model Fl_Tenant {
   /// justification string. Default-on for HIPAA-mode tenants.
   remoteRequiresJustification  Boolean @default(false)
 
+  // Phase 7 Workstream D — customer-facing portal join. Off by
+  // default; an admin flips it per-client to expose the fleet
+  // page on portal.pcc2k.com/fleet/*.
+  portalEnabled                Boolean @default(false)
+  /// Max age (days) of report artifacts surfaced to the customer
+  /// via /fleet/reports. Default 90 trims chatty history; HIPAA
+  /// tenants may want this tighter, non-HIPAA may want unlimited
+  /// (set to 9999).
+  portalReportMaxAgeDays       Int     @default(90)
+
   // Phase 5 — per-tenant report branding.
   /// Logo for the report PDF cover. Path under /api/uploads/...
   reportLogoUrl       String?
