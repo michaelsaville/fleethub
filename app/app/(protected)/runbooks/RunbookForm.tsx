@@ -190,10 +190,10 @@ export default function RunbookForm({
         <Field label="Cooldown (minutes)" hint="Per (alert kind, device). Skips fires within this window after a previous fire — keeps flapping alerts from blowing up the agent fleet.">
           <input type="number" min={0} max={1440} value={cooldownMin} onChange={(e) => setCooldownMin(Number(e.target.value))} style={{ ...FIELD, width: 100 }} />
         </Field>
-        <Field label="Circuit breaker — max fires per hour" hint="Step 4 (the circuit breaker) auto-trips a runbook that exceeds this. Step 3 just persists the threshold.">
+        <Field label="Circuit breaker — max fires per hour" hint="Evaluator auto-trips the runbook if non-skipped fires in the last rolling hour reach this. Counts across all devices.">
           <input type="number" min={1} max={1000} value={maxFiresPerHour} onChange={(e) => setMaxFiresPerHour(Number(e.target.value))} style={{ ...FIELD, width: 100 }} />
         </Field>
-        <Field label="Circuit breaker — max consecutive failures" hint="Step 4 trips after this many failures in a row.">
+        <Field label="Circuit breaker — max consecutive failures" hint="Watcher cron auto-trips after this many failed fires in a row (skipped fires don't count). Trips emit a routable runbook.tripped alert.">
           <input type="number" min={1} max={100} value={maxConsecutiveFailures} onChange={(e) => setMaxConsecutiveFailures(Number(e.target.value))} style={{ ...FIELD, width: 100 }} />
         </Field>
       </Section>

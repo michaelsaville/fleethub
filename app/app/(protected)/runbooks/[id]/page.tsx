@@ -4,7 +4,7 @@ import AppShell from "@/components/AppShell"
 import { requireSession } from "@/lib/authz"
 import { prisma } from "@/lib/prisma"
 import { relativeLastSeen } from "@/lib/devices-time"
-import { disableRunbook, enableRunbook } from "../actions"
+import { disableRunbook, enableRunbook, untripRunbook } from "../actions"
 
 export const dynamic = "force-dynamic"
 
@@ -113,13 +113,26 @@ export default async function RunbookDetailPage({
             borderRadius: 8,
             fontSize: 12,
             color: "var(--color-danger, #b91c1c)",
+            display: "flex",
+            gap: 16,
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
           }}>
-            <strong>Runbook tripped.</strong> {runbook.trippedReason ?? "Circuit breaker engaged."}{" "}
-            {runbook.trippedAt && <span style={{ color: "var(--color-text-muted)" }}>· {relativeLastSeen(runbook.trippedAt)}</span>}
-            <br />
-            <span style={{ color: "var(--color-text-muted)", fontSize: 11 }}>
-              Untrip lands with step 4 (circuit breaker) + step 6 (Cmd-K). Until then, clear via Prisma: <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>UPDATE fleethub.fl_runbooks SET is_tripped=false WHERE id=&apos;{runbook.id}&apos;</code>
-            </span>
+            <div>
+              <strong>Runbook tripped.</strong> {runbook.trippedReason ?? "Circuit breaker engaged."}{" "}
+              {runbook.trippedAt && <span style={{ color: "var(--color-text-muted)" }}>· {relativeLastSeen(runbook.trippedAt)}</span>}
+              <br />
+              <span style={{ color: "var(--color-text-muted)", fontSize: 11 }}>
+                The runbook won&rsquo;t fire again until untripped. Investigate the recent failures below before clearing.
+              </span>
+            </div>
+            {isAdmin && (
+              <form action={untripRunbook}>
+                <input type="hidden" name="id" value={runbook.id} />
+                <button type="submit" style={adminButton("primary")}>Untrip</button>
+              </form>
+            )}
           </div>
         )}
 
@@ -258,7 +271,7 @@ function ConfigSection({ runbook, match }: {
           ≤ {runbook.maxFiresPerHour}/hr · ≤ {runbook.maxConsecutiveFailures} fails
         </span>
         <div style={{ fontSize: 10.5, color: "var(--color-text-muted)", marginTop: 2 }}>
-          step 4 wires the trip
+          auto-trips on either threshold
         </div>
       </ConfigCell>
       <ConfigCell label="Dry-run first">

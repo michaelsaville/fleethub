@@ -44,3 +44,29 @@ export async function enableRunbook(formData: FormData): Promise<void> {
   if (typeof id !== "string") throw new Error("Missing runbook id")
   await toggleActive(id, true)
 }
+
+export async function untripRunbook(formData: FormData): Promise<void> {
+  const ctx = await requireAdmin()
+  const id = formData.get("id")
+  if (typeof id !== "string" || !id) throw new Error("Missing runbook id")
+  const runbook = await prisma.fl_Runbook.findUnique({ where: { id } })
+  if (!runbook) throw new Error("Runbook not found")
+  if (!runbook.isTripped) return  // idempotent — untrip of an un-tripped runbook is a no-op
+  await writeAudit({
+    actorEmail: ctx.email,
+    action: "runbook.untripped",
+    outcome: "ok",
+    detail: {
+      runbookId: id,
+      runbookName: runbook.name,
+      prevReason: runbook.trippedReason,
+      trippedAt: runbook.trippedAt?.toISOString() ?? null,
+    },
+  })
+  await prisma.fl_Runbook.update({
+    where: { id },
+    data: { isTripped: false, trippedReason: null, trippedAt: null },
+  })
+  revalidatePath("/runbooks")
+  revalidatePath(`/runbooks/${id}`)
+}
