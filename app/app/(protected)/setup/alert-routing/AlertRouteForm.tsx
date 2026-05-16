@@ -2,6 +2,8 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
+import { FIELD, TYPOGRAPHY, CARD } from "@/lib/ui-tokens"
+import { Button } from "@/components/ui/Button"
 
 // Phase 7 Workstream A step 3 — shared editor for create + edit.
 // No client-side state machine beyond local form state; all
@@ -42,15 +44,9 @@ export interface AlertRouteFormInput {
   isActive: boolean
 }
 
-const FIELD_STYLE: React.CSSProperties = {
-  padding: "7px 10px",
-  fontSize: "13px",
-  background: "var(--color-background-primary, #fff)",
-  color: "var(--color-text-primary)",
-  border: "0.5px solid var(--color-border-secondary, #d4d4d8)",
-  borderRadius: "6px",
-  outline: "none",
-}
+// FIELD_STYLE replaced by canonical FIELD token from
+// @/lib/ui-tokens (WS-C step 2 migration).
+const FIELD_STYLE = FIELD
 
 export default function AlertRouteForm({
   initial,
@@ -359,16 +355,25 @@ export default function AlertRouteForm({
 
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
         {isEdit && (
-          <button type="button" onClick={onDelete} disabled={deleting || submitting} style={{ padding: "8px 14px", fontSize: 13, color: "var(--color-danger, #b91c1c)", background: "transparent", border: "0.5px solid var(--color-danger, #b91c1c)", borderRadius: 6, cursor: deleting ? "not-allowed" : "pointer", marginRight: "auto", opacity: deleting ? 0.6 : 1 }}>
+          <Button
+            type="button"
+            variant="danger"
+            onClick={onDelete}
+            disabled={deleting || submitting}
+            style={{ marginRight: "auto", background: "transparent", color: "var(--color-danger)", border: "0.5px solid var(--color-danger)" }}
+          >
             {deleting ? "Deleting…" : "Delete route"}
-          </button>
+          </Button>
         )}
-        <Link href="/setup/alert-routing" style={{ padding: "8px 14px", fontSize: 13, color: "var(--color-text-secondary)", textDecoration: "none", borderRadius: 6 }}>
+        <Link
+          href="/setup/alert-routing"
+          style={{ padding: "8px 14px", fontSize: 13, color: "var(--color-text-secondary)", textDecoration: "none", borderRadius: "var(--radius-sm)" }}
+        >
           Cancel
         </Link>
-        <button type="submit" disabled={submitting} style={{ padding: "8px 16px", fontSize: 13, fontWeight: 600, color: "#fff", background: "var(--color-accent, #F97316)", border: "none", borderRadius: 6, cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}>
+        <Button type="submit" variant="primary" disabled={submitting}>
           {submitting ? "Saving…" : isEdit ? "Save changes" : "Create route"}
-        </button>
+        </Button>
       </div>
     </form>
   )
@@ -477,8 +482,8 @@ function ChannelRow({
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section style={{ display: "flex", flexDirection: "column", gap: 12, padding: "14px 16px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 10 }}>
-      <h2 style={{ fontSize: 12, fontWeight: 600, margin: 0, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{title}</h2>
+    <section style={{ ...CARD, display: "flex", flexDirection: "column", gap: 12, padding: "14px 16px" }}>
+      <h2 style={TYPOGRAPHY.LABEL_CAPS}>{title}</h2>
       {children}
     </section>
   )
@@ -489,7 +494,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--color-text-secondary)" }}>{label}</span>
       {children}
-      {hint && <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{hint}</span>}
+      {hint && <span style={TYPOGRAPHY.HINT}>{hint}</span>}
     </div>
   )
 }

@@ -2,6 +2,8 @@ import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import { requireSession } from "@/lib/authz"
 import { prisma } from "@/lib/prisma"
+import { EmptyState as UiEmptyState } from "@/components/ui/EmptyState"
+import { Chip } from "@/components/ui/Chip"
 
 export const dynamic = "force-dynamic"
 
@@ -163,21 +165,9 @@ function describeMatch(m: MatchPredicate): React.ReactNode {
 }
 
 function stateChip(isActive: boolean, isTripped: boolean): React.ReactNode {
-  if (isTripped) {
-    return chip("tripped", "var(--color-danger, #b91c1c)", "var(--color-danger-soft, rgba(239, 68, 68, 0.15))")
-  }
-  if (!isActive) {
-    return chip("disabled", "var(--color-text-muted)", "var(--color-background-tertiary, rgba(148, 163, 184, 0.18))")
-  }
-  return chip("active", "var(--color-success, #15803d)", "var(--color-success-soft, rgba(21, 128, 61, 0.15))")
-}
-
-function chip(label: string, color: string, bg: string): React.ReactNode {
-  return (
-    <span style={{ padding: "1px 8px", fontSize: "10px", fontWeight: 600, borderRadius: 999, background: bg, color, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-      {label}
-    </span>
-  )
+  if (isTripped) return <Chip tone="bad">tripped</Chip>
+  if (!isActive) return <Chip tone="neutral">disabled</Chip>
+  return <Chip tone="ok">active</Chip>
 }
 
 function sum(map: Record<string, number>, keys: string[]): number {
@@ -199,19 +189,12 @@ function Td({ children, align }: { children: React.ReactNode; align: "left" | "r
 
 function EmptyState({ isAdmin }: { isAdmin: boolean }) {
   return (
-    <div style={{
-      padding: "40px",
-      textAlign: "center",
-      background: "var(--color-background-secondary)",
-      border: "0.5px solid var(--color-border-tertiary)",
-      borderRadius: "10px",
-      color: "var(--color-text-muted)",
-      fontSize: "13px",
-    }}>
-      No runbooks yet.{" "}
-      {isAdmin
-        ? <>Click <strong>+ New runbook</strong> to bind an alert pattern to a signed script.</>
-        : <>An admin can add one via the wizard.</>}
-    </div>
+    <UiEmptyState
+      body={
+        isAdmin
+          ? <>No runbooks yet. Click <strong>+ New runbook</strong> to bind an alert pattern to a signed script.</>
+          : <>No runbooks yet. An admin can add one via the wizard.</>
+      }
+    />
   )
 }

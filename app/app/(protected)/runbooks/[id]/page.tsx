@@ -4,6 +4,8 @@ import AppShell from "@/components/AppShell"
 import { requireSession } from "@/lib/authz"
 import { prisma } from "@/lib/prisma"
 import { relativeLastSeen } from "@/lib/devices-time"
+import { Chip } from "@/components/ui/Chip"
+import type { Tone } from "@/lib/ui-tokens"
 import { disableRunbook, enableRunbook, untripRunbook } from "../actions"
 
 export const dynamic = "force-dynamic"
@@ -303,31 +305,17 @@ function ConfigCell({ label, children }: { label: string; children: React.ReactN
 }
 
 function stateChip(isActive: boolean, isTripped: boolean): React.ReactNode {
-  if (isTripped) return chip("tripped", "var(--color-danger, #b91c1c)", "var(--color-danger-soft, rgba(239, 68, 68, 0.15))")
-  if (!isActive) return chip("disabled", "var(--color-text-muted)", "var(--color-background-tertiary, rgba(148, 163, 184, 0.18))")
-  return chip("active", "var(--color-success, #15803d)", "var(--color-success-soft, rgba(21, 128, 61, 0.15))")
+  if (isTripped) return <Chip tone="bad">tripped</Chip>
+  if (!isActive) return <Chip tone="neutral">disabled</Chip>
+  return <Chip tone="ok">active</Chip>
 }
 
 function fireStateChip(state: string): React.ReactNode {
-  const color =
-    state === "running" || state === "succeeded" ? "var(--color-success, #15803d)" :
-    state === "pending" ? "var(--color-text-secondary)" :
-    state === "failed" ? "var(--color-danger, #b91c1c)" :
-    "var(--color-text-muted)"
-  const bg =
-    state === "running" || state === "succeeded" ? "var(--color-success-soft, rgba(21, 128, 61, 0.15))" :
-    state === "pending" ? "var(--color-background-tertiary, rgba(148, 163, 184, 0.18))" :
-    state === "failed" ? "var(--color-danger-soft, rgba(239, 68, 68, 0.15))" :
-    "var(--color-background-tertiary, rgba(148, 163, 184, 0.18))"
-  return chip(state.replace(/^skipped-/, ""), color, bg)
-}
-
-function chip(label: string, color: string, bg: string): React.ReactNode {
-  return (
-    <span style={{ padding: "1px 8px", fontSize: "10px", fontWeight: 600, borderRadius: 999, background: bg, color, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>
-      {label}
-    </span>
-  )
+  const tone: Tone =
+    state === "running" || state === "succeeded" ? "ok" :
+    state === "failed" ? "bad" :
+    "neutral"
+  return <Chip tone={tone}>{state.replace(/^skipped-/, "")}</Chip>
 }
 
 function Th({ children, align }: { children: React.ReactNode; align: "left" | "right" | "center" }) {
