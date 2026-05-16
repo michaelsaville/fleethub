@@ -96,6 +96,26 @@ export async function writeAlert(input: AlertInput): Promise<Fl_Alert> {
     }).catch(() => undefined)
   }
 
+  // Phase 7 Workstream B — runbook evaluator runs AFTER dispatch.
+  // Same isolation contract as the dispatch path: failures here
+  // never break alert creation.
+  try {
+    // Import inside the try so a build-time circular-dep doesn't
+    // wedge writeAlert; the evaluator imports matchesAlert from
+    // this file.
+    const { evaluateRunbooksForAlert } = await import("@/lib/runbook-evaluator")
+    await evaluateRunbooksForAlert(alert)
+  } catch (err) {
+    console.warn(`[runbook-evaluator] failed for ${alert.id}:`, err)
+    await writeAudit({
+      clientName: alert.clientName,
+      deviceId: alert.deviceId,
+      action: "runbook.evaluator.error",
+      outcome: "error",
+      detail: { alertId: alert.id, error: (err as Error).message },
+    }).catch(() => undefined)
+  }
+
   return alert
 }
 

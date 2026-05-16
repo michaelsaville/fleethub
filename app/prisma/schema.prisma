@@ -267,6 +267,86 @@ model Fl_AlertDispatch {
   @@schema("fleethub")
 }
 
+/// Phase 7 Workstream B — auto-remediation runbooks. A runbook
+/// matches alerts the same way an Fl_AlertRoute does (matchJson)
+/// and runs a registered Fl_Script on the affected device. Nothing
+/// arbitrary ever runs — Phase 2's signed-script lifecycle stays
+/// intact. Each runbook is gated by a cooldown + a circuit breaker
+/// so a misconfigured rule can't blow up the agent fleet.
+model Fl_Runbook {
+  id              String    @id @default(cuid())
+  name            String
+  description     String?
+  /// JSON match predicate, same shape as Fl_AlertRoute.matchJson:
+  /// {severity: ["critical"], kindLike: "disk.*"}.
+  matchJson       String
+  scriptId        String
+  script          Fl_Script @relation(fields: [scriptId], references: [id])
+  /// Minutes to wait between alert fire and runbook fire — lets a
+  /// transient alert clear before anything runs.
+  graceMin        Int       @default(2)
+  /// Cooldown per (alert.kind, deviceId). The runbook won't fire
+  /// for the same combo within this window. Critical to prevent
+  /// fire-storm runaway.
+  cooldownMin     Int       @default(30)
+  /// Phase 7 WS-B step 5 — dry-run-first gate. v1 ships with this
+  /// effectively unused (the dry-run + predicate flow lands in
+  /// step 5); the field is here so step 5 doesn't need a schema
+  /// change.
+  dryRunFirst             Boolean @default(true)
+  dryRunPredicateJson     String?
+  /// Phase 7 WS-B step 4 — circuit breaker fields. Filled by the
+  /// evaluator + the watcher; v1 step 1 doesn't read them yet.
+  maxFiresPerHour         Int     @default(10)
+  maxConsecutiveFailures  Int     @default(3)
+  isTripped               Boolean @default(false)
+  trippedReason           String?
+  trippedAt               DateTime?
+  isActive        Boolean   @default(true)
+  createdBy       String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  fires           Fl_RunbookFire[]
+
+  @@index([isActive, isTripped])
+  @@map("fl_runbooks")
+  @@schema("fleethub")
+}
+
+/// One row per runbook firing decision. State machine:
+///   pending → (grace elapses) → running → (script run completes via
+///   Fl_ScriptRun) state implicitly succeeded/failed by reading the
+///   linked Fl_ScriptRun.state. Terminal skips: skipped-cooldown,
+///   skipped-tripped, skipped-cleared (alert resolved during grace).
+model Fl_RunbookFire {
+  id              String     @id @default(cuid())
+  runbookId       String
+  runbook         Fl_Runbook @relation(fields: [runbookId], references: [id], onDelete: Cascade)
+  /// Null when manually fired (Phase 7.5 "fire now" button).
+  alertId         String?
+  deviceId        String
+  /// Mirror of the alert kind for cooldown lookups without a join.
+  alertKind       String?
+  /// Earliest time this fire is allowed to execute (createdAt +
+  /// runbook.graceMin). The cron polls rows with state="pending"
+  /// AND scheduledAt <= now.
+  scheduledAt     DateTime
+  state           String     // see model header
+  dryRunScriptRunId   String?
+  realScriptRunId     String?
+  predicateOutcome    String?  // "pass" | "fail" | "skip"
+  failureReason       String?
+  createdAt       DateTime   @default(now())
+  completedAt     DateTime?
+
+  @@index([state, scheduledAt])
+  @@index([runbookId, createdAt])
+  @@index([alertId])
+  @@map("fl_runbook_fires")
+  @@schema("fleethub")
+}
+
 /// Phase 7 Workstream A step 8 — on-call rotations used by
 /// alert-routing channels with `oncallScheduleId` set. The current
 /// on-call is computed at dispatch time, not pre-resolved at
@@ -341,6 +421,9 @@ model Fl_Script {
   outputContainsContent   Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  /// Phase 7 Workstream B — runbooks reference scripts. Back-relation.
+  runbooks      Fl_Runbook[]
 
   @@index([category, isCurated])
   @@map("fl_scripts")
