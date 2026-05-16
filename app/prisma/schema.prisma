@@ -23,6 +23,10 @@ model Fl_StaffUser {
   email     String   @unique
   name      String?
   role      String   @default("TECH") // ADMIN | TECH | VIEWER
+  /// Phase 7 Workstream A step 8 — E.164 mobile for SMS dispatch when
+  /// this user is the resolved on-call. Optional; staff without a
+  /// phone are skipped during sms-channel resolution.
+  phoneE164 String?
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -260,6 +264,30 @@ model Fl_AlertDispatch {
   @@index([alertId, escalationStep])
   @@index([state, escalateAt])
   @@map("fl_alert_dispatches")
+  @@schema("fleethub")
+}
+
+/// Phase 7 Workstream A step 8 — on-call rotations used by
+/// alert-routing channels with `oncallScheduleId` set. The current
+/// on-call is computed at dispatch time, not pre-resolved at
+/// schedule-create time, so rotation edits take effect instantly.
+/// Timezone is UTC across the board; DST-aware semantics are
+/// punted to v1.5 per PHASE-7-DESIGN §12.
+model Fl_OncallSchedule {
+  id              String   @id @default(cuid())
+  name            String   // "Ops primary", "Healthcare on-call"
+  /// JSON: array of { userId, dayOfWeek: 0-6 (Sunday=0), start: "HH:MM",
+  /// end: "HH:MM" } slots. Multiple slots may cover the same moment —
+  /// first match wins. UTC time-of-day.
+  rotationJson    String
+  /// JSON: array of { userId, start: ISO8601, end: ISO8601, reason }
+  /// override windows. Overrides take precedence over the rotation.
+  overridesJson   String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("fl_oncall_schedules")
   @@schema("fleethub")
 }
 

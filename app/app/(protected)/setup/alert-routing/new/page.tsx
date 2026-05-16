@@ -7,7 +7,10 @@ export const dynamic = "force-dynamic"
 
 export default async function NewAlertRoutePage() {
   await requireAdmin()
-  const tenantOptions = await loadTenantOptions()
+  const [tenantOptions, oncallOptions] = await Promise.all([
+    loadTenantOptions(),
+    loadOncallOptions(),
+  ])
   return (
     <AppShell>
       <div style={{ display: "flex", flexDirection: "column", gap: "16px", maxWidth: 760 }}>
@@ -33,10 +36,20 @@ export default async function NewAlertRoutePage() {
             isActive: true,
           }}
           tenantOptions={tenantOptions}
+          oncallOptions={oncallOptions}
         />
       </div>
     </AppShell>
   )
+}
+
+async function loadOncallOptions() {
+  const rows = await prisma.fl_OncallSchedule.findMany({
+    where: { isActive: true },
+    orderBy: { name: "asc" },
+    select: { id: true, name: true },
+  })
+  return rows
 }
 
 async function loadTenantOptions(): Promise<string[]> {

@@ -19,6 +19,7 @@ interface StoredChannel {
   ccEmails?: string[]
   phoneNumbers?: string[]
   integrationKey?: string
+  oncallScheduleId?: string
 }
 interface StoredEscalationStep {
   afterMin?: number
@@ -33,6 +34,7 @@ function hydrateChannel(c: StoredChannel) {
     ccEmails: (c.ccEmails ?? []).join(", "),
     phoneNumbers: (c.phoneNumbers ?? []).join(", "),
     integrationKey: c.integrationKey ?? "",
+    oncallScheduleId: c.oncallScheduleId ?? "",
   }
 }
 
@@ -46,7 +48,14 @@ export default async function EditAlertRoutePage({
   const route = await prisma.fl_AlertRoute.findUnique({ where: { id } })
   if (!route) notFound()
 
-  const tenantOptions = await loadTenantOptions()
+  const [tenantOptions, oncallOptions] = await Promise.all([
+    loadTenantOptions(),
+    prisma.fl_OncallSchedule.findMany({
+      where: { isActive: true },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
+  ])
 
   let parsedMatch: StoredMatch = {}
   let parsedChannels: StoredChannel[] = []
@@ -104,6 +113,7 @@ export default async function EditAlertRoutePage({
             isActive: route.isActive,
           }}
           tenantOptions={tenantOptions}
+          oncallOptions={oncallOptions}
         />
       </div>
     </AppShell>

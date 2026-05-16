@@ -17,6 +17,12 @@ interface ChannelDraft {
   ccEmails: string         // email — comma-separated
   phoneNumbers: string     // sms   — comma-separated E.164
   integrationKey: string   // pagerduty
+  oncallScheduleId: string // email/sms — when set, recipients resolved at dispatch
+}
+
+export interface OncallOption {
+  id: string
+  name: string
 }
 
 interface EscalationStepDraft {
@@ -49,16 +55,18 @@ const FIELD_STYLE: React.CSSProperties = {
 export default function AlertRouteForm({
   initial,
   tenantOptions,
+  oncallOptions,
 }: {
   initial: AlertRouteFormInput
   tenantOptions: string[]
+  oncallOptions: OncallOption[]
 }) {
   const router = useRouter()
   const [tenantName, setTenantName] = useState<string>(initial.tenantName ?? "")
   const [severity, setSeverity] = useState<Severity[]>(initial.severity)
   const [kindLike, setKindLike] = useState(initial.kindLike)
   const [channels, setChannels] = useState<ChannelDraft[]>(
-    initial.channels.length > 0 ? initial.channels : [{ type: "slack", webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "", integrationKey: "" }],
+    initial.channels.length > 0 ? initial.channels : [{ type: "slack", webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "", integrationKey: "", oncallScheduleId: "" }],
   )
   const [escalation, setEscalation] = useState<EscalationStepDraft[]>(initial.escalation)
   const [dedup, setDedup] = useState(initial.dedupWindowMin)
@@ -75,7 +83,7 @@ export default function AlertRouteForm({
   }
 
   function addChannel(type: ChannelType) {
-    setChannels((prev) => [...prev, { type, webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "", integrationKey: "" }])
+    setChannels((prev) => [...prev, { type, webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "", integrationKey: "", oncallScheduleId: "" }])
   }
 
   function updateChannel(i: number, patch: Partial<ChannelDraft>) {
@@ -89,7 +97,7 @@ export default function AlertRouteForm({
   function addEscalationStep() {
     setEscalation((prev) => [
       ...prev,
-      { afterMin: prev.length === 0 ? 5 : 10, channels: [{ type: "slack", webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "", integrationKey: "" }] },
+      { afterMin: prev.length === 0 ? 5 : 10, channels: [{ type: "slack", webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "", integrationKey: "", oncallScheduleId: "" }] },
     ])
   }
   function removeEscalationStep(i: number) {
@@ -100,7 +108,7 @@ export default function AlertRouteForm({
   }
   function addStepChannel(stepIdx: number, type: ChannelType) {
     updateEscalationStep(stepIdx, {
-      channels: [...escalation[stepIdx].channels, { type, webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "", integrationKey: "" }],
+      channels: [...escalation[stepIdx].channels, { type, webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "", integrationKey: "", oncallScheduleId: "" }],
     })
   }
   function updateStepChannel(stepIdx: number, chIdx: number, patch: Partial<ChannelDraft>) {
@@ -123,10 +131,16 @@ export default function AlertRouteForm({
         return { type: c.type, webhookUrl: c.webhookUrl.trim() }
       }
       if (c.type === "sms") {
-        return {
-          type: "sms" as const,
+        const sms: {
+          type: "sms"
+          phoneNumbers: string[]
+          oncallScheduleId?: string
+        } = {
+          type: "sms",
           phoneNumbers: c.phoneNumbers.split(",").map((s) => s.trim()).filter(Boolean),
         }
+        if (c.oncallScheduleId) sms.oncallScheduleId = c.oncallScheduleId
+        return sms
       }
       if (c.type === "pagerduty") {
         return { type: "pagerduty" as const, integrationKey: c.integrationKey.trim() }
@@ -134,11 +148,18 @@ export default function AlertRouteForm({
       if (c.type === "ticket") {
         return { type: "ticket" as const }
       }
-      return {
-        type: "email" as const,
+      const email: {
+        type: "email"
+        toEmails: string[]
+        ccEmails: string[]
+        oncallScheduleId?: string
+      } = {
+        type: "email",
         toEmails: c.toEmails.split(",").map((s) => s.trim()).filter(Boolean),
         ccEmails: c.ccEmails.split(",").map((s) => s.trim()).filter(Boolean),
       }
+      if (c.oncallScheduleId) email.oncallScheduleId = c.oncallScheduleId
+      return email
     }
     const body = {
       tenantName: tenantName.trim() || null,
@@ -230,6 +251,7 @@ export default function AlertRouteForm({
           <ChannelRow
             key={i}
             channel={c}
+            oncallOptions={oncallOptions}
             onChange={(patch) => updateChannel(i, patch)}
             onRemove={channels.length > 1 ? () => removeChannel(i) : null}
           />
@@ -294,6 +316,7 @@ export default function AlertRouteForm({
               <ChannelRow
                 key={chIdx}
                 channel={c}
+                oncallOptions={oncallOptions}
                 onChange={(patch) => updateStepChannel(stepIdx, chIdx, patch)}
                 onRemove={step.channels.length > 1 ? () => removeStepChannel(stepIdx, chIdx) : null}
               />
@@ -353,13 +376,17 @@ export default function AlertRouteForm({
 
 function ChannelRow({
   channel,
+  oncallOptions,
   onChange,
   onRemove,
 }: {
   channel: ChannelDraft
+  oncallOptions: OncallOption[]
   onChange: (patch: Partial<ChannelDraft>) => void
   onRemove: (() => void) | null
 }) {
+  const useOncall = channel.oncallScheduleId !== ""
+  const canUseOncall = channel.type === "email" || channel.type === "sms"
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "8px 10px", background: "var(--color-background-primary, #fff)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 6 }}>
       <span style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", width: 50 }}>{channel.type}</span>
@@ -372,13 +399,24 @@ function ChannelRow({
           style={{ ...FIELD_STYLE, flex: 1 }}
         />
       ) : channel.type === "sms" ? (
-        <input
-          type="text"
-          value={channel.phoneNumbers}
-          onChange={(e) => onChange({ phoneNumbers: e.target.value })}
-          placeholder="+14155551234, +14155555678 (E.164 only)"
-          style={{ ...FIELD_STYLE, flex: 1 }}
-        />
+        useOncall ? (
+          <select
+            value={channel.oncallScheduleId}
+            onChange={(e) => onChange({ oncallScheduleId: e.target.value })}
+            style={{ ...FIELD_STYLE, flex: 1 }}
+          >
+            <option value="">(pick a schedule)</option>
+            {oncallOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={channel.phoneNumbers}
+            onChange={(e) => onChange({ phoneNumbers: e.target.value })}
+            placeholder="+14155551234, +14155555678 (E.164 only)"
+            style={{ ...FIELD_STYLE, flex: 1 }}
+          />
+        )
       ) : channel.type === "pagerduty" ? (
         <input
           type="text"
@@ -391,6 +429,15 @@ function ChannelRow({
         <span style={{ flex: 1, fontSize: 12, color: "var(--color-text-muted)" }}>
           Auto-creates a TicketHub ticket. Priority + board are derived from severity + kind on the TH side. Idempotent per alert.id.
         </span>
+      ) : useOncall ? (
+        <select
+          value={channel.oncallScheduleId}
+          onChange={(e) => onChange({ oncallScheduleId: e.target.value })}
+          style={{ ...FIELD_STYLE, flex: 1 }}
+        >
+          <option value="">(pick a schedule)</option>
+          {oncallOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+        </select>
       ) : (
         <div style={{ display: "flex", gap: 6, flex: 1 }}>
           <input
@@ -408,6 +455,16 @@ function ChannelRow({
             style={{ ...FIELD_STYLE, flex: 1 }}
           />
         </div>
+      )}
+      {canUseOncall && oncallOptions.length > 0 && (
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>
+          <input
+            type="checkbox"
+            checked={useOncall}
+            onChange={(e) => onChange({ oncallScheduleId: e.target.checked ? (oncallOptions[0]?.id ?? "") : "" })}
+          />
+          on-call
+        </label>
       )}
       {onRemove && (
         <button type="button" onClick={onRemove} style={{ padding: "4px 8px", fontSize: 11, color: "var(--color-text-muted)", background: "transparent", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, cursor: "pointer" }}>

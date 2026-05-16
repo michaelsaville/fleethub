@@ -22,6 +22,9 @@ export interface NormalizedChannel {
   phoneNumbers?: string[]
   /** PagerDuty Events API v2 integration key. */
   integrationKey?: string
+  /** Phase 7 WS-A step 8 — email/sms channels can defer recipient
+   *  resolution to the current on-call user of this schedule. */
+  oncallScheduleId?: string
 }
 
 export interface NormalizedEscalationStep {
@@ -146,25 +149,29 @@ function validateChannelList(
       continue
     }
     if (type === "email") {
+      const oncallId = typeof c.oncallScheduleId === "string" ? c.oncallScheduleId.trim() : ""
       const toIn = Array.isArray(c.toEmails) ? c.toEmails : []
       const to: string[] = []
       for (const x of toIn) {
         if (typeof x === "string" && EMAIL_RE.test(x.trim())) to.push(x.trim())
       }
-      if (to.length === 0) {
-        return { error: `${label} email channel: at least one valid toEmail required` }
+      if (!oncallId && to.length === 0) {
+        return { error: `${label} email channel: at least one valid toEmail required (or an oncallScheduleId)` }
       }
       const ccIn = Array.isArray(c.ccEmails) ? c.ccEmails : []
       const cc: string[] = []
       for (const x of ccIn) {
         if (typeof x === "string" && EMAIL_RE.test(x.trim())) cc.push(x.trim())
       }
-      const channel: NormalizedChannel = { type: "email", toEmails: to }
+      const channel: NormalizedChannel = { type: "email" }
+      if (to.length > 0) channel.toEmails = to
       if (cc.length > 0) channel.ccEmails = cc
+      if (oncallId) channel.oncallScheduleId = oncallId
       out.push(channel)
       continue
     }
     if (type === "sms") {
+      const oncallId = typeof c.oncallScheduleId === "string" ? c.oncallScheduleId.trim() : ""
       const numbersIn = Array.isArray(c.phoneNumbers) ? c.phoneNumbers : []
       const phoneNumbers: string[] = []
       for (const x of numbersIn) {
@@ -175,13 +182,16 @@ function validateChannelList(
         }
         phoneNumbers.push(trimmed)
       }
-      if (phoneNumbers.length === 0) {
-        return { error: `${label} sms channel: at least one E.164 phone number required` }
+      if (!oncallId && phoneNumbers.length === 0) {
+        return { error: `${label} sms channel: at least one E.164 phone number required (or an oncallScheduleId)` }
       }
       if (phoneNumbers.length > 20) {
         return { error: `${label} sms channel: max 20 phone numbers per channel` }
       }
-      out.push({ type: "sms", phoneNumbers })
+      const channel: NormalizedChannel = { type: "sms" }
+      if (phoneNumbers.length > 0) channel.phoneNumbers = phoneNumbers
+      if (oncallId) channel.oncallScheduleId = oncallId
+      out.push(channel)
       continue
     }
     if (type === "pagerduty") {

@@ -6,6 +6,7 @@ import { sendAlertEmail } from "@/lib/m365-mail"
 import { sendAlertSms, redactPhone } from "@/lib/sms-twilio"
 import { sendAlertToPagerDuty, redactPdKey } from "@/lib/pagerduty"
 import { createAutoTicket } from "@/lib/auto-ticket"
+import { resolveCurrentOncall } from "@/lib/oncall"
 import type { Fl_Alert } from "@prisma/client"
 
 // Phase 7 Workstream A step 1 — match-route-and-dispatch core.
@@ -46,7 +47,12 @@ interface ChannelConfig {
    *  so different clients can route to different PD services from one
    *  FleetHub install). */
   integrationKey?: string
-  // Channel-specific fields for ticket land in step 7.
+  /** Phase 7 WS-A step 8 — when set on an email or sms channel,
+   *  recipients are resolved from the schedule's current on-call user
+   *  at dispatch time. Static toEmails/phoneNumbers are ignored when
+   *  this is present + resolves successfully. */
+  oncallScheduleId?: string
+  // (no remaining unimplemented channel-specific fields.)
   [key: string]: unknown
 }
 
@@ -297,7 +303,30 @@ async function dispatchEmail(
   escalationStep: number,
   escalateAt: Date | null,
 ): Promise<void> {
-  const to = Array.isArray(channel.toEmails) ? channel.toEmails.filter((s) => typeof s === "string" && s.trim()) : []
+  let to: string[] = []
+  let oncallSuffix = ""
+  if (typeof channel.oncallScheduleId === "string" && channel.oncallScheduleId.trim()) {
+    const resolved = await resolveCurrentOncall(channel.oncallScheduleId.trim())
+    if (!resolved) {
+      await prisma.fl_AlertDispatch.create({
+        data: {
+          alertId: alert.id,
+          routeId,
+          channel: "email",
+          destination: "—",
+          state: "failed",
+          escalationStep,
+          escalateAt,
+          errorReason: "on-call resolver returned no user (inactive schedule / unscheduled time / inactive user)",
+        },
+      })
+      return
+    }
+    to = [resolved.user.email]
+    oncallSuffix = ` (on-call${resolved.fromOverride ? " override" : ""})`
+  } else {
+    to = Array.isArray(channel.toEmails) ? channel.toEmails.filter((s) => typeof s === "string" && s.trim()) : []
+  }
   if (to.length === 0) {
     await prisma.fl_AlertDispatch.create({
       data: {
@@ -317,7 +346,7 @@ async function dispatchEmail(
   // Privacy-respecting destination fingerprint: recipient count + first
   // address's domain. Never the raw addresses (audit log is searchable).
   const firstDomain = to[0].split("@")[1] ?? "—"
-  const fingerprint = `${to.length} recipient${to.length === 1 ? "" : "s"} @ ${firstDomain}`
+  const fingerprint = `${to.length} recipient${to.length === 1 ? "" : "s"} @ ${firstDomain}${oncallSuffix}`
   const sev = alert.severity.toUpperCase()
   const subject = `[FleetHub ${sev}] ${alert.clientName} — ${alert.title}`
   const htmlBody = buildAlertEmailHtml(alert)
@@ -357,9 +386,47 @@ async function dispatchSms(
   escalationStep: number,
   escalateAt: Date | null,
 ): Promise<void> {
-  const numbers = Array.isArray(channel.phoneNumbers)
-    ? channel.phoneNumbers.filter((s): s is string => typeof s === "string" && s.trim() !== "")
-    : []
+  let numbers: string[] = []
+  let oncallSuffix = ""
+  if (typeof channel.oncallScheduleId === "string" && channel.oncallScheduleId.trim()) {
+    const resolved = await resolveCurrentOncall(channel.oncallScheduleId.trim())
+    if (!resolved) {
+      await prisma.fl_AlertDispatch.create({
+        data: {
+          alertId: alert.id,
+          routeId,
+          channel: "sms",
+          destination: "—",
+          state: "failed",
+          escalationStep,
+          escalateAt,
+          errorReason: "on-call resolver returned no user (inactive schedule / unscheduled time / inactive user)",
+        },
+      })
+      return
+    }
+    if (!resolved.user.phoneE164) {
+      await prisma.fl_AlertDispatch.create({
+        data: {
+          alertId: alert.id,
+          routeId,
+          channel: "sms",
+          destination: "—",
+          state: "failed",
+          escalationStep,
+          escalateAt,
+          errorReason: `on-call user "${resolved.user.email}" has no phoneE164 set`,
+        },
+      })
+      return
+    }
+    numbers = [resolved.user.phoneE164]
+    oncallSuffix = ` (on-call${resolved.fromOverride ? " override" : ""})`
+  } else {
+    numbers = Array.isArray(channel.phoneNumbers)
+      ? channel.phoneNumbers.filter((s): s is string => typeof s === "string" && s.trim() !== "")
+      : []
+  }
   if (numbers.length === 0) {
     await prisma.fl_AlertDispatch.create({
       data: {
@@ -377,7 +444,7 @@ async function dispatchSms(
   }
   // Privacy-respecting fingerprint: recipient count + last-4 of
   // first number. Never the raw E.164 in the audit chain.
-  const fingerprint = `${numbers.length} SMS · ${redactPhone(numbers[0])}`
+  const fingerprint = `${numbers.length} SMS · ${redactPhone(numbers[0])}${oncallSuffix}`
   try {
     await sendAlertSms(numbers, {
       id: alert.id,

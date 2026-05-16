@@ -55,7 +55,15 @@ export default async function SetupPage() {
             href="/setup/alert-routing"
             label="Alert routing"
             status={isAdmin ? "live" : "ADMIN-only"}
-            description="Where alerts go when they fire. Per-tenant Slack/Teams/email channels, severity + kind match, dedup."
+            description="Where alerts go when they fire. Per-tenant Slack/Teams/email/SMS/PagerDuty/TicketHub channels, severity + kind match, dedup, escalation chains."
+            disabled={!isAdmin}
+            disabledHint={!isAdmin ? "ADMIN-only" : undefined}
+          />
+          <SetupCard
+            href="/setup/oncall-schedules"
+            label="On-call schedules"
+            status={isAdmin ? "live" : "ADMIN-only"}
+            description="Weekly rotations + ad-hoc overrides. Referenced by email/SMS alert channels to resolve recipients at dispatch time."
             disabled={!isAdmin}
             disabledHint={!isAdmin ? "ADMIN-only" : undefined}
           />
