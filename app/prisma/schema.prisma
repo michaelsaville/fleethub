@@ -113,6 +113,13 @@ model Fl_Device {
   // Drained on next compatible window or explicit "Reboot now".
   pendingReboot        Boolean   @default(false)
   pendingRebootSince   DateTime?
+  /// Phase 7 Workstream C — RustDesk peer ID for this host. Used
+  /// in free-tier mode (no Pro license) to hand off a `rustdesk://`
+  /// deep link to the operator's local client. In Pro mode it's
+  /// also fetched from the management API; this column is the
+  /// FleetHub-side cache so the device page doesn't round-trip on
+  /// every load. Null until populated.
+  rustdeskId    String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -146,6 +153,14 @@ model Fl_Tenant {
   protectedProcessNamesJson   String?
   defaultRingId               String?  // FK to Fl_DeployRing
   defaultPackageRebootPolicy  String   @default("defer-if-user-active")
+
+  // Phase 7 Workstream C — remote control toggle. Defaults vary by
+  // hipaaMode (operator picks at tenant-create time per the design;
+  // the toggle here is the explicit value).
+  remoteControlEnabled         Boolean @default(true)
+  /// When true, every Fl_RemoteSession.create REQUIRES a non-empty
+  /// justification string. Default-on for HIPAA-mode tenants.
+  remoteRequiresJustification  Boolean @default(false)
 
   // Phase 5 — per-tenant report branding.
   /// Logo for the report PDF cover. Path under /api/uploads/...
@@ -264,6 +279,47 @@ model Fl_AlertDispatch {
   @@index([alertId, escalationStep])
   @@index([state, escalateAt])
   @@map("fl_alert_dispatches")
+  @@schema("fleethub")
+}
+
+/// Phase 7 Workstream C — remote control session. One row per
+/// "operator opened a session to a device" event. In Pro mode the
+/// access token is minted via the RustDesk Pro management API
+/// and bcrypt-hashed here so the raw token never lives at rest.
+/// In free mode (no Pro license) accessTokenHash is null and
+/// the session is operator-asserted: a "Mark as opened" + "Mark
+/// as closed" pair on the device page drives the lifecycle.
+model Fl_RemoteSession {
+  id              String    @id @default(cuid())
+  deviceId        String
+  operatorEmail   String
+  /// Pro-mode: session id returned by the RustDesk management
+  /// API at open. Free-mode: null (no API to ask).
+  rustdeskSessionId   String?
+  /// Pro-mode: bcrypt of the one-time access token. Free-mode: null.
+  accessTokenHash     String?
+  accessTokenExpiresAt DateTime?
+  /// HIPAA-mode justification. Required when the tenant has
+  /// remoteRequiresJustification=true; null otherwise.
+  justification   String?
+  /// "issued" | "in-progress" | "closed" | "expired" | "revoked"
+  state           String
+  startedAt       DateTime?
+  endedAt         DateTime?
+  /// Bytes transferred over the RustDesk channel — Pro mode only;
+  /// free mode leaves null. A long session that moved a lot of
+  /// data is worth flagging on the audit page even when we
+  /// can't reconstruct what moved.
+  bytesTransferred BigInt?
+  /// Operator-assertion mode marker — true when the close was
+  /// recorded by the operator clicking "Mark as closed" rather
+  /// than by the Pro API reporting an actual disconnect.
+  assertedClose   Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+
+  @@index([deviceId, createdAt])
+  @@index([state, accessTokenExpiresAt])
+  @@map("fl_remote_sessions")
   @@schema("fleethub")
 }
 
