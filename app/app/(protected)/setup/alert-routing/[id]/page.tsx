@@ -18,6 +18,19 @@ interface StoredChannel {
   toEmails?: string[]
   ccEmails?: string[]
 }
+interface StoredEscalationStep {
+  afterMin?: number
+  channels?: StoredChannel[]
+}
+
+function hydrateChannel(c: StoredChannel) {
+  return {
+    type: c.type as "slack" | "teams" | "email",
+    webhookUrl: c.webhookUrl ?? "",
+    toEmails: (c.toEmails ?? []).join(", "),
+    ccEmails: (c.ccEmails ?? []).join(", "),
+  }
+}
 
 export default async function EditAlertRoutePage({
   params,
@@ -48,11 +61,19 @@ export default async function EditAlertRoutePage({
 
   const channels = parsedChannels
     .filter((c) => c.type === "slack" || c.type === "teams" || c.type === "email")
-    .map((c) => ({
-      type: c.type as "slack" | "teams" | "email",
-      webhookUrl: c.webhookUrl ?? "",
-      toEmails: (c.toEmails ?? []).join(", "),
-      ccEmails: (c.ccEmails ?? []).join(", "),
+    .map(hydrateChannel)
+
+  let parsedEscalation: StoredEscalationStep[] = []
+  try {
+    if (route.escalationJson) parsedEscalation = JSON.parse(route.escalationJson) as StoredEscalationStep[]
+  } catch { /* shrug */ }
+  const escalation = parsedEscalation
+    .filter((s) => typeof s.afterMin === "number" && Array.isArray(s.channels))
+    .map((s) => ({
+      afterMin: s.afterMin!,
+      channels: (s.channels ?? [])
+        .filter((c) => c.type === "slack" || c.type === "teams" || c.type === "email")
+        .map(hydrateChannel),
     }))
 
   return (
@@ -73,6 +94,7 @@ export default async function EditAlertRoutePage({
             severity,
             kindLike: parsedMatch.kindLike ?? "",
             channels,
+            escalation,
             dedupWindowMin: route.dedupWindowMin,
             priority: route.priority,
             isActive: route.isActive,

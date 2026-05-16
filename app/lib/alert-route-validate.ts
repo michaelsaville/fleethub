@@ -20,11 +20,18 @@ export interface NormalizedChannel {
   ccEmails?: string[]
 }
 
+export interface NormalizedEscalationStep {
+  afterMin: number
+  channels: NormalizedChannel[]
+}
+
 export interface ValidRoutePayload {
   ok: true
   tenantName: string | null
   match: NormalizedMatch
   channels: NormalizedChannel[]
+  /** Empty array when no escalation chain is configured. */
+  escalation: NormalizedEscalationStep[]
   dedupWindowMin: number
   priority: number
   isActive: boolean
@@ -65,48 +72,29 @@ export function validateRoutePayload(body: Record<string, unknown>): ValidateRes
   if (kindLikeRaw) match.kindLike = kindLikeRaw
 
   // channels — at least one required.
-  if (!Array.isArray(body.channels) || body.channels.length === 0) {
-    return { ok: false, reason: "at least one channel is required" }
-  }
-  if (body.channels.length > 10) {
-    return { ok: false, reason: "max 10 channels per route" }
-  }
-  const channels: NormalizedChannel[] = []
-  for (let i = 0; i < body.channels.length; i++) {
-    const c = body.channels[i] as Record<string, unknown> | null
-    if (!c || typeof c !== "object") {
-      return { ok: false, reason: `channel ${i + 1}: not an object` }
+  const primary = validateChannelList(body.channels, "primary")
+  if ("error" in primary) return { ok: false, reason: primary.error }
+  const channels = primary.channels
+
+  // escalation chain — optional
+  const escalation: NormalizedEscalationStep[] = []
+  if (Array.isArray(body.escalation)) {
+    if (body.escalation.length > 10) {
+      return { ok: false, reason: "max 10 escalation steps" }
     }
-    const type = c.type
-    if (type === "slack" || type === "teams") {
-      const url = typeof c.webhookUrl === "string" ? c.webhookUrl.trim() : ""
-      if (!url) return { ok: false, reason: `${type} channel: webhookUrl required` }
-      if (!isValidWebhookUrl(url, type)) {
-        return { ok: false, reason: `${type} channel: webhookUrl does not look like a ${type} incoming webhook` }
+    for (let i = 0; i < body.escalation.length; i++) {
+      const s = body.escalation[i] as Record<string, unknown> | null
+      if (!s || typeof s !== "object") {
+        return { ok: false, reason: `escalation step ${i + 1}: not an object` }
       }
-      channels.push({ type, webhookUrl: url })
-      continue
+      const afterMin = clampInt(s.afterMin, 1, 1440, 0)
+      if (afterMin <= 0) {
+        return { ok: false, reason: `escalation step ${i + 1}: afterMin must be 1-1440` }
+      }
+      const stepChannels = validateChannelList(s.channels, `escalation step ${i + 1}`)
+      if ("error" in stepChannels) return { ok: false, reason: stepChannels.error }
+      escalation.push({ afterMin, channels: stepChannels.channels })
     }
-    if (type === "email") {
-      const toIn = Array.isArray(c.toEmails) ? c.toEmails : []
-      const to: string[] = []
-      for (const x of toIn) {
-        if (typeof x === "string" && EMAIL_RE.test(x.trim())) to.push(x.trim())
-      }
-      if (to.length === 0) {
-        return { ok: false, reason: "email channel: at least one valid toEmail required" }
-      }
-      const ccIn = Array.isArray(c.ccEmails) ? c.ccEmails : []
-      const cc: string[] = []
-      for (const x of ccIn) {
-        if (typeof x === "string" && EMAIL_RE.test(x.trim())) cc.push(x.trim())
-      }
-      const channel: NormalizedChannel = { type: "email", toEmails: to }
-      if (cc.length > 0) channel.ccEmails = cc
-      channels.push(channel)
-      continue
-    }
-    return { ok: false, reason: `channel ${i + 1}: type "${String(type)}" not supported (slack | teams | email)` }
   }
 
   // numbers
@@ -119,10 +107,61 @@ export function validateRoutePayload(body: Record<string, unknown>): ValidateRes
     tenantName,
     match,
     channels,
+    escalation,
     dedupWindowMin,
     priority,
     isActive,
   }
+}
+
+function validateChannelList(
+  raw: unknown,
+  label: string,
+): { channels: NormalizedChannel[] } | { error: string } {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { error: `${label}: at least one channel is required` }
+  }
+  if (raw.length > 10) {
+    return { error: `${label}: max 10 channels` }
+  }
+  const out: NormalizedChannel[] = []
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i] as Record<string, unknown> | null
+    if (!c || typeof c !== "object") {
+      return { error: `${label} channel ${i + 1}: not an object` }
+    }
+    const type = c.type
+    if (type === "slack" || type === "teams") {
+      const url = typeof c.webhookUrl === "string" ? c.webhookUrl.trim() : ""
+      if (!url) return { error: `${label} ${type} channel: webhookUrl required` }
+      if (!isValidWebhookUrl(url, type)) {
+        return { error: `${label} ${type} channel: webhookUrl does not look like a ${type} incoming webhook` }
+      }
+      out.push({ type, webhookUrl: url })
+      continue
+    }
+    if (type === "email") {
+      const toIn = Array.isArray(c.toEmails) ? c.toEmails : []
+      const to: string[] = []
+      for (const x of toIn) {
+        if (typeof x === "string" && EMAIL_RE.test(x.trim())) to.push(x.trim())
+      }
+      if (to.length === 0) {
+        return { error: `${label} email channel: at least one valid toEmail required` }
+      }
+      const ccIn = Array.isArray(c.ccEmails) ? c.ccEmails : []
+      const cc: string[] = []
+      for (const x of ccIn) {
+        if (typeof x === "string" && EMAIL_RE.test(x.trim())) cc.push(x.trim())
+      }
+      const channel: NormalizedChannel = { type: "email", toEmails: to }
+      if (cc.length > 0) channel.ccEmails = cc
+      out.push(channel)
+      continue
+    }
+    return { error: `${label} channel ${i + 1}: type "${String(type)}" not supported (slack | teams | email)` }
+  }
+  return { channels: out }
 }
 
 function clampInt(v: unknown, lo: number, hi: number, fallback: number): number {

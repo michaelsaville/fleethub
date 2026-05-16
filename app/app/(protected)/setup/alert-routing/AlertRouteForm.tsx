@@ -17,12 +17,18 @@ interface ChannelDraft {
   ccEmails: string
 }
 
+interface EscalationStepDraft {
+  afterMin: number
+  channels: ChannelDraft[]
+}
+
 export interface AlertRouteFormInput {
   id: string | null
   tenantName: string | null
   severity: Severity[]
   kindLike: string
   channels: ChannelDraft[]
+  escalation: EscalationStepDraft[]
   dedupWindowMin: number
   priority: number
   isActive: boolean
@@ -52,6 +58,7 @@ export default function AlertRouteForm({
   const [channels, setChannels] = useState<ChannelDraft[]>(
     initial.channels.length > 0 ? initial.channels : [{ type: "slack", webhookUrl: "", toEmails: "", ccEmails: "" }],
   )
+  const [escalation, setEscalation] = useState<EscalationStepDraft[]>(initial.escalation)
   const [dedup, setDedup] = useState(initial.dedupWindowMin)
   const [priority, setPriority] = useState(initial.priority)
   const [isActive, setIsActive] = useState(initial.isActive)
@@ -77,24 +84,59 @@ export default function AlertRouteForm({
     setChannels((prev) => prev.filter((_, idx) => idx !== i))
   }
 
+  function addEscalationStep() {
+    setEscalation((prev) => [
+      ...prev,
+      { afterMin: prev.length === 0 ? 5 : 10, channels: [{ type: "slack", webhookUrl: "", toEmails: "", ccEmails: "" }] },
+    ])
+  }
+  function removeEscalationStep(i: number) {
+    setEscalation((prev) => prev.filter((_, idx) => idx !== i))
+  }
+  function updateEscalationStep(i: number, patch: Partial<EscalationStepDraft>) {
+    setEscalation((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)))
+  }
+  function addStepChannel(stepIdx: number, type: ChannelType) {
+    updateEscalationStep(stepIdx, {
+      channels: [...escalation[stepIdx].channels, { type, webhookUrl: "", toEmails: "", ccEmails: "" }],
+    })
+  }
+  function updateStepChannel(stepIdx: number, chIdx: number, patch: Partial<ChannelDraft>) {
+    updateEscalationStep(stepIdx, {
+      channels: escalation[stepIdx].channels.map((c, idx) => (idx === chIdx ? { ...c, ...patch } : c)),
+    })
+  }
+  function removeStepChannel(stepIdx: number, chIdx: number) {
+    updateEscalationStep(stepIdx, {
+      channels: escalation[stepIdx].channels.filter((_, idx) => idx !== chIdx),
+    })
+  }
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
     setSubmitting(true)
+    const serializeChannel = (c: ChannelDraft) => {
+      if (c.type === "slack" || c.type === "teams") {
+        return { type: c.type, webhookUrl: c.webhookUrl.trim() }
+      }
+      return {
+        type: "email" as const,
+        toEmails: c.toEmails.split(",").map((s) => s.trim()).filter(Boolean),
+        ccEmails: c.ccEmails.split(",").map((s) => s.trim()).filter(Boolean),
+      }
+    }
     const body = {
       tenantName: tenantName.trim() || null,
       match: {
         severity,
         kindLike: kindLike.trim() || undefined,
       },
-      channels: channels.map((c) => {
-        if (c.type === "slack" || c.type === "teams") return { type: c.type, webhookUrl: c.webhookUrl.trim() }
-        return {
-          type: "email" as const,
-          toEmails: c.toEmails.split(",").map((s) => s.trim()).filter(Boolean),
-          ccEmails: c.ccEmails.split(",").map((s) => s.trim()).filter(Boolean),
-        }
-      }),
+      channels: channels.map(serializeChannel),
+      escalation: escalation.map((s) => ({
+        afterMin: s.afterMin,
+        channels: s.channels.map(serializeChannel),
+      })),
       dedupWindowMin: dedup,
       priority,
       isActive,
@@ -182,6 +224,72 @@ export default function AlertRouteForm({
           <AddButton onClick={() => addChannel("slack")}>+ Slack</AddButton>
           <AddButton onClick={() => addChannel("teams")}>+ Teams</AddButton>
           <AddButton onClick={() => addChannel("email")}>+ Email</AddButton>
+        </div>
+      </Section>
+
+      <Section title="Escalation chain">
+        <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+          When the alert isn&rsquo;t acked within{" "}
+          <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 11 }}>afterMin</code>
+          {" "}minutes, the next step fires. A cron worker handles the
+          timing — check{" "}
+          <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 11 }}>
+            /api/cron/alert-escalator
+          </code>
+          {" "}is in the host crontab (every 1m).
+        </span>
+        {escalation.map((step, stepIdx) => (
+          <div
+            key={stepIdx}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+              padding: "10px 12px",
+              background: "var(--color-background-primary, #fff)",
+              border: "0.5px solid var(--color-border-tertiary)",
+              borderRadius: 6,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                Step {stepIdx + 1}
+              </span>
+              <span style={{ fontSize: 12 }}>After</span>
+              <input
+                type="number"
+                min={1}
+                max={1440}
+                value={step.afterMin}
+                onChange={(e) => updateEscalationStep(stepIdx, { afterMin: Number(e.target.value) })}
+                style={{ ...FIELD_STYLE, width: 80 }}
+              />
+              <span style={{ fontSize: 12 }}>minutes, send to:</span>
+              <button
+                type="button"
+                onClick={() => removeEscalationStep(stepIdx)}
+                style={{ marginLeft: "auto", padding: "3px 7px", fontSize: 11, color: "var(--color-text-muted)", background: "transparent", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, cursor: "pointer" }}
+              >
+                Remove step
+              </button>
+            </div>
+            {step.channels.map((c, chIdx) => (
+              <ChannelRow
+                key={chIdx}
+                channel={c}
+                onChange={(patch) => updateStepChannel(stepIdx, chIdx, patch)}
+                onRemove={step.channels.length > 1 ? () => removeStepChannel(stepIdx, chIdx) : null}
+              />
+            ))}
+            <div style={{ display: "flex", gap: 8 }}>
+              <AddButton onClick={() => addStepChannel(stepIdx, "slack")}>+ Slack</AddButton>
+              <AddButton onClick={() => addStepChannel(stepIdx, "teams")}>+ Teams</AddButton>
+              <AddButton onClick={() => addStepChannel(stepIdx, "email")}>+ Email</AddButton>
+            </div>
+          </div>
+        ))}
+        <div>
+          <AddButton onClick={addEscalationStep}>+ Add escalation step</AddButton>
         </div>
       </Section>
 

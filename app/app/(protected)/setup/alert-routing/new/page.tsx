@@ -27,6 +27,7 @@ export default async function NewAlertRoutePage() {
             severity: [],
             kindLike: "",
             channels: [],
+            escalation: [],
             dedupWindowMin: 15,
             priority: 100,
             isActive: true,

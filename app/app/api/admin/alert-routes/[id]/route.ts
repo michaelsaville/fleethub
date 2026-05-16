@@ -32,6 +32,7 @@ export async function PATCH(
       tenantName: v.tenantName,
       matchJson: JSON.stringify(v.match),
       channelsJson: JSON.stringify(v.channels),
+      escalationJson: v.escalation.length > 0 ? JSON.stringify(v.escalation) : null,
       dedupWindowMin: v.dedupWindowMin,
       isActive: v.isActive,
       priority: v.priority,
@@ -51,10 +52,12 @@ export async function DELETE(
 
   // Detach existing dispatch rows from the route so historical
   // dispatches keep their channel/state but their FK reference is
-  // cleared. Fl_AlertDispatch.routeId is already nullable.
+  // cleared. Fl_AlertDispatch.routeId is already nullable. Also
+  // null out escalateAt — a detached dispatch can't be escalated
+  // (the cron has no chain to consult).
   await prisma.fl_AlertDispatch.updateMany({
     where: { routeId: id },
-    data: { routeId: null },
+    data: { routeId: null, escalateAt: null },
   })
   await prisma.fl_AlertRoute.delete({ where: { id } })
   return NextResponse.json({ ok: true })

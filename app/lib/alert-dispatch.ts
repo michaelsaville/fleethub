@@ -41,6 +41,11 @@ interface ChannelConfig {
   [key: string]: unknown
 }
 
+interface EscalationStep {
+  afterMin: number
+  channels: ChannelConfig[]
+}
+
 /**
  * Create an Fl_Alert AND dispatch it. The single helper every
  * alert-writing path should go through; existing prisma.fl_Alert
@@ -148,8 +153,16 @@ export async function dispatchAlert(alert: Fl_Alert): Promise<void> {
     } catch {
       continue
     }
+    // Compute escalateAt for the primary dispatch: now + the first
+    // chain step's afterMin. Cron picks it up when the ack window
+    // expires (state="sent"/"failed" + escalateAt <= now + alert
+    // not acked/resolved). Null when the route has no chain.
+    const chain = parseEscalationChain(r.escalationJson)
+    const escalateAt = chain.length > 0
+      ? new Date(Date.now() + chain[0].afterMin * 60_000)
+      : null
     for (const ch of channels) {
-      await dispatchOneChannel(alert, ch, r.id)
+      await dispatchOneChannel(alert, ch, r.id, 0, escalateAt)
     }
     return
   }
@@ -171,18 +184,24 @@ export async function dispatchAlert(alert: Fl_Alert): Promise<void> {
   await dispatchOneChannel(alert, { type: "slack", webhookUrl: fallback }, null)
 }
 
-async function dispatchOneChannel(
+/**
+ * Public so the escalator cron can call directly with its own
+ * escalationStep + escalateAt computed from chain[step].
+ */
+export async function dispatchOneChannel(
   alert: Fl_Alert,
   channel: ChannelConfig,
   routeId: string | null,
+  escalationStep = 0,
+  escalateAt: Date | null = null,
 ): Promise<void> {
   switch (channel.type) {
     case "slack":
-      return dispatchWebhook(alert, channel, routeId, "slack", postAlertToSlack)
+      return dispatchWebhook(alert, channel, routeId, "slack", postAlertToSlack, escalationStep, escalateAt)
     case "teams":
-      return dispatchWebhook(alert, channel, routeId, "teams", postAlertToTeams)
+      return dispatchWebhook(alert, channel, routeId, "teams", postAlertToTeams, escalationStep, escalateAt)
     case "email":
-      return dispatchEmail(alert, channel, routeId)
+      return dispatchEmail(alert, channel, routeId, escalationStep, escalateAt)
     default:
       // sms/pagerduty/ticket each land in later steps.
       await prisma.fl_AlertDispatch.create({
@@ -192,7 +211,8 @@ async function dispatchOneChannel(
           channel: channel.type,
           destination: "—",
           state: "skipped-no-channel",
-          escalationStep: 0,
+          escalationStep,
+          escalateAt,
           errorReason: `channel type "${channel.type}" not yet implemented (Phase 7 WS-A)`,
         },
       })
@@ -206,6 +226,8 @@ async function dispatchWebhook(
   routeId: string | null,
   label: "slack" | "teams",
   poster: (url: string, alert: Fl_Alert) => Promise<void>,
+  escalationStep: number,
+  escalateAt: Date | null,
 ): Promise<void> {
   const url = (channel.webhookUrl ?? "").trim()
   if (!url) {
@@ -216,7 +238,8 @@ async function dispatchWebhook(
         channel: label,
         destination: "—",
         state: "failed",
-        escalationStep: 0,
+        escalationStep,
+        escalateAt,
         errorReason: "no webhookUrl configured",
       },
     })
@@ -232,7 +255,8 @@ async function dispatchWebhook(
         channel: label,
         destination: fingerprint,
         state: "sent",
-        escalationStep: 0,
+        escalationStep,
+        escalateAt,
       },
     })
   } catch (err) {
@@ -243,7 +267,8 @@ async function dispatchWebhook(
         channel: label,
         destination: fingerprint,
         state: "failed",
-        escalationStep: 0,
+        escalationStep,
+        escalateAt,
         errorReason: (err as Error).message.slice(0, 500),
       },
     })
@@ -254,6 +279,8 @@ async function dispatchEmail(
   alert: Fl_Alert,
   channel: ChannelConfig,
   routeId: string | null,
+  escalationStep: number,
+  escalateAt: Date | null,
 ): Promise<void> {
   const to = Array.isArray(channel.toEmails) ? channel.toEmails.filter((s) => typeof s === "string" && s.trim()) : []
   if (to.length === 0) {
@@ -264,7 +291,8 @@ async function dispatchEmail(
         channel: "email",
         destination: "—",
         state: "failed",
-        escalationStep: 0,
+        escalationStep,
+        escalateAt,
         errorReason: "no toEmails configured",
       },
     })
@@ -287,7 +315,8 @@ async function dispatchEmail(
         channel: "email",
         destination: fingerprint,
         state: "sent",
-        escalationStep: 0,
+        escalationStep,
+        escalateAt,
       },
     })
   } catch (err) {
@@ -298,10 +327,32 @@ async function dispatchEmail(
         channel: "email",
         destination: fingerprint,
         state: "failed",
-        escalationStep: 0,
+        escalationStep,
+        escalateAt,
         errorReason: (err as Error).message.slice(0, 500),
       },
     })
+  }
+}
+
+/** Public for the escalator cron + the route-create UI. */
+export function parseEscalationChain(json: string | null): EscalationStep[] {
+  if (!json) return []
+  try {
+    const parsed = JSON.parse(json) as unknown
+    if (!Array.isArray(parsed)) return []
+    const out: EscalationStep[] = []
+    for (const s of parsed) {
+      if (!s || typeof s !== "object") continue
+      const step = s as { afterMin?: unknown; channels?: unknown }
+      const afterMin = typeof step.afterMin === "number" && step.afterMin > 0 ? step.afterMin : null
+      if (afterMin == null) continue
+      if (!Array.isArray(step.channels)) continue
+      out.push({ afterMin, channels: step.channels as ChannelConfig[] })
+    }
+    return out
+  } catch {
+    return []
   }
 }
 

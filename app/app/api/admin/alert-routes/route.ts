@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
       tenantName: v.tenantName,
       matchJson: JSON.stringify(v.match),
       channelsJson: JSON.stringify(v.channels),
-      escalationJson: null,
+      escalationJson: v.escalation.length > 0 ? JSON.stringify(v.escalation) : null,
       dedupWindowMin: v.dedupWindowMin,
       isActive: v.isActive,
       priority: v.priority,
