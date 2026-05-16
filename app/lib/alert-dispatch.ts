@@ -4,6 +4,7 @@ import { writeAudit } from "@/lib/audit"
 import { postAlertToSlack, postAlertToTeams } from "@/lib/webhook-delivery"
 import { sendAlertEmail } from "@/lib/m365-mail"
 import { sendAlertSms, redactPhone } from "@/lib/sms-twilio"
+import { sendAlertToPagerDuty, redactPdKey } from "@/lib/pagerduty"
 import type { Fl_Alert } from "@prisma/client"
 
 // Phase 7 Workstream A step 1 — match-route-and-dispatch core.
@@ -40,7 +41,11 @@ interface ChannelConfig {
   ccEmails?: string[]
   /** SMS — array of E.164 phone numbers ("+14155551234"). */
   phoneNumbers?: string[]
-  // Channel-specific fields for pagerduty/ticket land in later steps.
+  /** PagerDuty — Events API v2 integration key (lives on the channel
+   *  so different clients can route to different PD services from one
+   *  FleetHub install). */
+  integrationKey?: string
+  // Channel-specific fields for ticket land in step 7.
   [key: string]: unknown
 }
 
@@ -207,8 +212,10 @@ export async function dispatchOneChannel(
       return dispatchEmail(alert, channel, routeId, escalationStep, escalateAt)
     case "sms":
       return dispatchSms(alert, channel, routeId, escalationStep, escalateAt)
+    case "pagerduty":
+      return dispatchPagerDuty(alert, channel, routeId, escalationStep, escalateAt)
     default:
-      // pagerduty/ticket each land in later steps.
+      // ticket lands in step 7.
       await prisma.fl_AlertDispatch.create({
         data: {
           alertId: alert.id,
@@ -393,6 +400,67 @@ async function dispatchSms(
         alertId: alert.id,
         routeId,
         channel: "sms",
+        destination: fingerprint,
+        state: "failed",
+        escalationStep,
+        escalateAt,
+        errorReason: (err as Error).message.slice(0, 500),
+      },
+    })
+  }
+}
+
+async function dispatchPagerDuty(
+  alert: Fl_Alert,
+  channel: ChannelConfig,
+  routeId: string | null,
+  escalationStep: number,
+  escalateAt: Date | null,
+): Promise<void> {
+  const key = typeof channel.integrationKey === "string" ? channel.integrationKey.trim() : ""
+  if (!key) {
+    await prisma.fl_AlertDispatch.create({
+      data: {
+        alertId: alert.id,
+        routeId,
+        channel: "pagerduty",
+        destination: "—",
+        state: "failed",
+        escalationStep,
+        escalateAt,
+        errorReason: "no integrationKey configured",
+      },
+    })
+    return
+  }
+  const fingerprint = `pd ${redactPdKey(key)}`
+  try {
+    const { dedupKey } = await sendAlertToPagerDuty(key, {
+      id: alert.id,
+      clientName: alert.clientName,
+      deviceId: alert.deviceId,
+      kind: alert.kind,
+      severity: alert.severity,
+      title: alert.title,
+    })
+    await prisma.fl_AlertDispatch.create({
+      data: {
+        alertId: alert.id,
+        routeId,
+        channel: "pagerduty",
+        destination: fingerprint,
+        state: "sent",
+        escalationStep,
+        escalateAt,
+        externalId: dedupKey,
+      },
+    })
+  } catch (err) {
+    await prisma.fl_AlertDispatch.create({
+      data: {
+        alertId: alert.id,
+        routeId,
+        channel: "pagerduty",
         destination: fingerprint,
         state: "failed",
         escalationStep,

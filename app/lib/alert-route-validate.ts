@@ -14,12 +14,14 @@ interface NormalizedMatch {
 }
 
 export interface NormalizedChannel {
-  type: "slack" | "teams" | "email" | "sms"
+  type: "slack" | "teams" | "email" | "sms" | "pagerduty"
   webhookUrl?: string
   toEmails?: string[]
   ccEmails?: string[]
   /** E.164 phone numbers for sms channels. */
   phoneNumbers?: string[]
+  /** PagerDuty Events API v2 integration key. */
+  integrationKey?: string
 }
 
 export interface NormalizedEscalationStep {
@@ -182,7 +184,21 @@ function validateChannelList(
       out.push({ type: "sms", phoneNumbers })
       continue
     }
-    return { error: `${label} channel ${i + 1}: type "${String(type)}" not supported (slack | teams | email | sms)` }
+    if (type === "pagerduty") {
+      const key = typeof c.integrationKey === "string" ? c.integrationKey.trim() : ""
+      if (!key) {
+        return { error: `${label} pagerduty channel: integrationKey required` }
+      }
+      // PD integration keys are 32 hex chars. Be lenient on format
+      // but enforce a sane length so a typo'd partial key doesn't
+      // sail through.
+      if (key.length < 20 || key.length > 80) {
+        return { error: `${label} pagerduty channel: integrationKey looks malformed (length ${key.length})` }
+      }
+      out.push({ type: "pagerduty", integrationKey: key })
+      continue
+    }
+    return { error: `${label} channel ${i + 1}: type "${String(type)}" not supported (slack | teams | email | sms | pagerduty)` }
   }
   return { channels: out }
 }

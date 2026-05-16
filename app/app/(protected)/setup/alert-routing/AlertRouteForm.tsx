@@ -7,15 +7,16 @@ import Link from "next/link"
 // No client-side state machine beyond local form state; all
 // persistence goes through /api/admin/alert-routes.
 
-type ChannelType = "slack" | "teams" | "email" | "sms"
+type ChannelType = "slack" | "teams" | "email" | "sms" | "pagerduty"
 type Severity = "critical" | "warn" | "info"
 
 interface ChannelDraft {
   type: ChannelType
   webhookUrl: string
-  toEmails: string       // email — comma-separated
-  ccEmails: string       // email — comma-separated
-  phoneNumbers: string   // sms   — comma-separated E.164
+  toEmails: string         // email — comma-separated
+  ccEmails: string         // email — comma-separated
+  phoneNumbers: string     // sms   — comma-separated E.164
+  integrationKey: string   // pagerduty
 }
 
 interface EscalationStepDraft {
@@ -57,7 +58,7 @@ export default function AlertRouteForm({
   const [severity, setSeverity] = useState<Severity[]>(initial.severity)
   const [kindLike, setKindLike] = useState(initial.kindLike)
   const [channels, setChannels] = useState<ChannelDraft[]>(
-    initial.channels.length > 0 ? initial.channels : [{ type: "slack", webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "" }],
+    initial.channels.length > 0 ? initial.channels : [{ type: "slack", webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "", integrationKey: "" }],
   )
   const [escalation, setEscalation] = useState<EscalationStepDraft[]>(initial.escalation)
   const [dedup, setDedup] = useState(initial.dedupWindowMin)
@@ -74,7 +75,7 @@ export default function AlertRouteForm({
   }
 
   function addChannel(type: ChannelType) {
-    setChannels((prev) => [...prev, { type, webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "" }])
+    setChannels((prev) => [...prev, { type, webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "", integrationKey: "" }])
   }
 
   function updateChannel(i: number, patch: Partial<ChannelDraft>) {
@@ -88,7 +89,7 @@ export default function AlertRouteForm({
   function addEscalationStep() {
     setEscalation((prev) => [
       ...prev,
-      { afterMin: prev.length === 0 ? 5 : 10, channels: [{ type: "slack", webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "" }] },
+      { afterMin: prev.length === 0 ? 5 : 10, channels: [{ type: "slack", webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "", integrationKey: "" }] },
     ])
   }
   function removeEscalationStep(i: number) {
@@ -99,7 +100,7 @@ export default function AlertRouteForm({
   }
   function addStepChannel(stepIdx: number, type: ChannelType) {
     updateEscalationStep(stepIdx, {
-      channels: [...escalation[stepIdx].channels, { type, webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "" }],
+      channels: [...escalation[stepIdx].channels, { type, webhookUrl: "", toEmails: "", ccEmails: "", phoneNumbers: "", integrationKey: "" }],
     })
   }
   function updateStepChannel(stepIdx: number, chIdx: number, patch: Partial<ChannelDraft>) {
@@ -126,6 +127,9 @@ export default function AlertRouteForm({
           type: "sms" as const,
           phoneNumbers: c.phoneNumbers.split(",").map((s) => s.trim()).filter(Boolean),
         }
+      }
+      if (c.type === "pagerduty") {
+        return { type: "pagerduty" as const, integrationKey: c.integrationKey.trim() }
       }
       return {
         type: "email" as const,
@@ -232,6 +236,7 @@ export default function AlertRouteForm({
           <AddButton onClick={() => addChannel("teams")}>+ Teams</AddButton>
           <AddButton onClick={() => addChannel("email")}>+ Email</AddButton>
           <AddButton onClick={() => addChannel("sms")}>+ SMS</AddButton>
+          <AddButton onClick={() => addChannel("pagerduty")}>+ PagerDuty</AddButton>
         </div>
       </Section>
 
@@ -294,6 +299,7 @@ export default function AlertRouteForm({
               <AddButton onClick={() => addStepChannel(stepIdx, "teams")}>+ Teams</AddButton>
               <AddButton onClick={() => addStepChannel(stepIdx, "email")}>+ Email</AddButton>
               <AddButton onClick={() => addStepChannel(stepIdx, "sms")}>+ SMS</AddButton>
+              <AddButton onClick={() => addStepChannel(stepIdx, "pagerduty")}>+ PagerDuty</AddButton>
             </div>
           </div>
         ))}
@@ -367,6 +373,14 @@ function ChannelRow({
           onChange={(e) => onChange({ phoneNumbers: e.target.value })}
           placeholder="+14155551234, +14155555678 (E.164 only)"
           style={{ ...FIELD_STYLE, flex: 1 }}
+        />
+      ) : channel.type === "pagerduty" ? (
+        <input
+          type="text"
+          value={channel.integrationKey}
+          onChange={(e) => onChange({ integrationKey: e.target.value })}
+          placeholder="Events API v2 integration key (32 hex chars)"
+          style={{ ...FIELD_STYLE, flex: 1, fontFamily: "ui-monospace, SFMono-Regular, monospace" }}
         />
       ) : (
         <div style={{ display: "flex", gap: 6, flex: 1 }}>
