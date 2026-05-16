@@ -11,6 +11,7 @@ import { relativeLastSeen } from "@/lib/devices-time"
 import type { AlertRow } from "@/lib/alerts"
 import type { DeviceRow } from "@/lib/devices"
 import BrandingTab from "./BrandingTab"
+import TenantSettingsTab from "./TenantSettingsTab"
 
 export const dynamic = "force-dynamic"
 
@@ -20,6 +21,7 @@ const TABS = [
   { id: "alerts",   label: "Alerts"   },
   { id: "activity", label: "Activity" },
   { id: "branding", label: "Branding" },
+  { id: "settings", label: "Settings" },
 ] as const
 type TabId = typeof TABS[number]["id"]
 
@@ -38,7 +40,7 @@ export default async function ClientDetailPage({
   const client = await getClient(name)
   if (!client) notFound()
 
-  const [{ rows: devices }, { rows: alerts }, activity, tenantBranding] = await Promise.all([
+  const [{ rows: devices }, { rows: alerts }, activity, tenantRow] = await Promise.all([
     listDevices({ client: name }),
     listAlerts({ client: name, state: "all" }),
     getClientActivity(name, 40),
@@ -48,6 +50,10 @@ export default async function ClientDetailPage({
         reportLogoUrl: true,
         reportAccentColor: true,
         reportFooterText: true,
+        remoteControlEnabled: true,
+        remoteRequiresJustification: true,
+        portalEnabled: true,
+        portalReportMaxAgeDays: true,
       },
     }),
   ])
@@ -71,9 +77,20 @@ export default async function ClientDetailPage({
           <BrandingTab
             tenantName={name}
             initial={{
-              reportLogoUrl: tenantBranding?.reportLogoUrl ?? null,
-              reportAccentColor: tenantBranding?.reportAccentColor ?? "#F97316",
-              reportFooterText: tenantBranding?.reportFooterText ?? null,
+              reportLogoUrl: tenantRow?.reportLogoUrl ?? null,
+              reportAccentColor: tenantRow?.reportAccentColor ?? "#F97316",
+              reportFooterText: tenantRow?.reportFooterText ?? null,
+            }}
+          />
+        )}
+        {tab === "settings" && (
+          <TenantSettingsTab
+            tenantName={name}
+            initial={{
+              remoteControlEnabled: tenantRow?.remoteControlEnabled ?? true,
+              remoteRequiresJustification: tenantRow?.remoteRequiresJustification ?? false,
+              portalEnabled: tenantRow?.portalEnabled ?? false,
+              portalReportMaxAgeDays: tenantRow?.portalReportMaxAgeDays ?? 90,
             }}
           />
         )}
