@@ -234,3 +234,57 @@ export async function postAlertToSlack(
     throw new Error(`slack webhook returned ${res.status}: ${await res.text().catch(() => "")}`)
   }
 }
+
+const SEVERITY_THEME = { critical: "B91C1C", warn: "B45309", info: "0B6E99" } as const
+
+/**
+ * POST an alert-shaped MessageCard to a Teams incoming webhook.
+ * Same transport as `deliverToTeams` (report flavor); content
+ * mirrors the Slack alert layout.
+ */
+export async function postAlertToTeams(
+  webhookUrl: string,
+  alert: AlertForDelivery,
+): Promise<void> {
+  const sev = (SEVERITY_EMOJI as Record<string, string>)[alert.severity] ?? "⚠"
+  const theme = (SEVERITY_THEME as Record<string, string>)[alert.severity] ?? "555555"
+  const link = `${publicBaseUrl()}/alerts/${alert.id}`
+  const deviceLink = alert.deviceId
+    ? `${publicBaseUrl()}/devices/${alert.deviceId}`
+    : null
+
+  const payload = {
+    "@type": "MessageCard",
+    "@context": "http://schema.org/extensions",
+    summary: `${alert.severity.toUpperCase()} alert — ${alert.clientName}`,
+    themeColor: theme,
+    title: `${sev} ${alert.severity.toUpperCase()} — ${alert.clientName}`,
+    sections: [
+      {
+        activityTitle: alert.title,
+        facts: [
+          { name: "Kind", value: alert.kind },
+          { name: "Device", value: deviceLink ? `[view](${deviceLink})` : "—" },
+        ],
+        markdown: true,
+      },
+    ],
+    potentialAction: [
+      {
+        "@type": "OpenUri",
+        name: "Open in FleetHub",
+        targets: [{ os: "default", uri: link }],
+      },
+    ],
+  }
+
+  const res = await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  })
+  if (!res.ok) {
+    throw new Error(`teams webhook returned ${res.status}: ${await res.text().catch(() => "")}`)
+  }
+}

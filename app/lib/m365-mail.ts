@@ -116,3 +116,51 @@ export async function sendReportEmail(input: SendReportEmailInput): Promise<void
     throw new Error(`Graph sendMail ${res.status}: ${text.slice(0, 300)}`)
   }
 }
+
+// ─── Phase 7 Workstream A — alert email ──────────────────────────────────
+
+export interface SendAlertEmailInput {
+  to: string[]
+  cc?: string[]
+  subject: string
+  htmlBody: string
+}
+
+/**
+ * Attachment-free sendMail for Workstream A alert routing. Mirrors
+ * sendReportEmail's Graph auth path but drops the PDF — alerts go
+ * out with HTML body only.
+ */
+export async function sendAlertEmail(input: SendAlertEmailInput): Promise<void> {
+  if (!m365Configured()) {
+    throw new Error(
+      "M365 not configured (need AZURE_AD_* + M365_SENDER_UPN). Alert email cannot deliver.",
+    )
+  }
+  const token = await getAppOnlyToken()
+  const sender = process.env.M365_SENDER_UPN!
+  const payload = {
+    message: {
+      subject: input.subject,
+      body: { contentType: "HTML", content: input.htmlBody },
+      toRecipients: input.to.map((address) => ({ emailAddress: { address } })),
+      ccRecipients: (input.cc ?? []).map((address) => ({ emailAddress: { address } })),
+    },
+    saveToSentItems: true,
+  }
+  const res = await fetch(
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(sender)}/sendMail`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  )
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Graph sendMail (alert) ${res.status}: ${text.slice(0, 300)}`)
+  }
+}
