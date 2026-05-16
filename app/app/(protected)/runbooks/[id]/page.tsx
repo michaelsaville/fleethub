@@ -4,6 +4,7 @@ import AppShell from "@/components/AppShell"
 import { requireSession } from "@/lib/authz"
 import { prisma } from "@/lib/prisma"
 import { relativeLastSeen } from "@/lib/devices-time"
+import { disableRunbook, enableRunbook } from "../actions"
 
 export const dynamic = "force-dynamic"
 
@@ -17,7 +18,8 @@ export default async function RunbookDetailPage({
 }: {
   params: Promise<{ id: string }>
 }) {
-  await requireSession()
+  const ctx = await requireSession()
+  const isAdmin = ctx.role === "ADMIN"
   const { id } = await params
 
   const runbook = await prisma.fl_Runbook.findUnique({
@@ -67,17 +69,39 @@ export default async function RunbookDetailPage({
   return (
     <AppShell>
       <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-        <header>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <h1 style={{ fontSize: "20px", fontWeight: 600, margin: 0, letterSpacing: "-0.01em" }}>
-              {runbook.name}
-            </h1>
-            {stateChip(runbook.isActive, runbook.isTripped)}
+        <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <h1 style={{ fontSize: "20px", fontWeight: 600, margin: 0, letterSpacing: "-0.01em" }}>
+                {runbook.name}
+              </h1>
+              {stateChip(runbook.isActive, runbook.isTripped)}
+            </div>
+            {runbook.description && (
+              <p style={{ color: "var(--color-text-secondary)", fontSize: "13px", margin: "4px 0 0" }}>
+                {runbook.description}
+              </p>
+            )}
           </div>
-          {runbook.description && (
-            <p style={{ color: "var(--color-text-secondary)", fontSize: "13px", margin: "4px 0 0" }}>
-              {runbook.description}
-            </p>
+          {isAdmin && (
+            <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+              {runbook.isActive ? (
+                <form action={disableRunbook}>
+                  <input type="hidden" name="id" value={runbook.id} />
+                  <button type="submit" style={adminButton("secondary")}>Disable</button>
+                </form>
+              ) : (
+                <form action={enableRunbook}>
+                  <input type="hidden" name="id" value={runbook.id} />
+                  <button type="submit" disabled={runbook.isTripped} title={runbook.isTripped ? "Untrip first (step 4)" : ""} style={adminButton(runbook.isTripped ? "disabled" : "primary")}>
+                    Enable
+                  </button>
+                </form>
+              )}
+              <Link href={`/runbooks/${runbook.id}/edit`} style={{ ...adminButton("primary"), display: "inline-block", textDecoration: "none" }}>
+                Edit
+              </Link>
+            </div>
           )}
         </header>
 
@@ -94,7 +118,7 @@ export default async function RunbookDetailPage({
             {runbook.trippedAt && <span style={{ color: "var(--color-text-muted)" }}>· {relativeLastSeen(runbook.trippedAt)}</span>}
             <br />
             <span style={{ color: "var(--color-text-muted)", fontSize: 11 }}>
-              Untrip lands with step 4 (circuit breaker) + step 6 (Cmd-K). Until then, clear via Prisma: <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>UPDATE fl_runbooks SET is_tripped=false WHERE id=&apos;{runbook.id}&apos;</code>
+              Untrip lands with step 4 (circuit breaker) + step 6 (Cmd-K). Until then, clear via Prisma: <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>UPDATE fleethub.fl_runbooks SET is_tripped=false WHERE id=&apos;{runbook.id}&apos;</code>
             </span>
           </div>
         )}
@@ -293,4 +317,14 @@ function Th({ children, align }: { children: React.ReactNode; align: "left" | "r
 }
 function Td({ children, align }: { children: React.ReactNode; align: "left" | "right" | "center" }) {
   return <td style={{ padding: "8px 12px", textAlign: align, verticalAlign: "top" }}>{children}</td>
+}
+
+function adminButton(variant: "primary" | "secondary" | "disabled"): React.CSSProperties {
+  if (variant === "disabled") {
+    return { padding: "6px 12px", fontSize: 12.5, fontWeight: 600, color: "var(--color-text-muted)", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 6, cursor: "not-allowed" }
+  }
+  if (variant === "primary") {
+    return { padding: "6px 12px", fontSize: 12.5, fontWeight: 600, color: "#fff", background: "var(--color-accent, #F97316)", border: "none", borderRadius: 6, cursor: "pointer" }
+  }
+  return { padding: "6px 12px", fontSize: 12.5, fontWeight: 600, color: "var(--color-text-secondary)", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 6, cursor: "pointer" }
 }

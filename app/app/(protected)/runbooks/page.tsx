@@ -15,7 +15,8 @@ interface MatchPredicate {
 }
 
 export default async function RunbooksListPage() {
-  await requireSession()
+  const ctx = await requireSession()
+  const isAdmin = ctx.role === "ADMIN"
 
   const runbooks = await prisma.fl_Runbook.findMany({
     orderBy: [{ isTripped: "desc" }, { isActive: "desc" }, { name: "asc" }],
@@ -55,13 +56,28 @@ export default async function RunbooksListPage() {
               land with the wizard in step 3.
             </p>
           </div>
-          {/* "+ New runbook" lands with step 3 (the wizard). Until then,
-              operators define runbooks via Prisma — keeps step 2's UI
-              scope honest. */}
+          {isAdmin && (
+            <Link
+              href="/runbooks/new"
+              style={{
+                flexShrink: 0,
+                padding: "8px 14px",
+                background: "var(--color-accent, #F97316)",
+                color: "#fff",
+                fontSize: "13px",
+                fontWeight: 600,
+                borderRadius: "8px",
+                textDecoration: "none",
+                whiteSpace: "nowrap",
+              }}
+            >
+              + New runbook
+            </Link>
+          )}
         </header>
 
         {runbooks.length === 0 ? (
-          <EmptyState />
+          <EmptyState isAdmin={isAdmin} />
         ) : (
           <div style={{
             background: "var(--color-background-secondary)",
@@ -181,7 +197,7 @@ function Td({ children, align }: { children: React.ReactNode; align: "left" | "r
   return <td style={{ padding: "10px 12px", textAlign: align, whiteSpace: "nowrap" }}>{children}</td>
 }
 
-function EmptyState() {
+function EmptyState({ isAdmin }: { isAdmin: boolean }) {
   return (
     <div style={{
       padding: "40px",
@@ -193,7 +209,9 @@ function EmptyState() {
       fontSize: "13px",
     }}>
       No runbooks yet.{" "}
-      An admin can add one via the wizard in step 3, or hand-write the row via Prisma until then.
+      {isAdmin
+        ? <>Click <strong>+ New runbook</strong> to bind an alert pattern to a signed script.</>
+        : <>An admin can add one via the wizard.</>}
     </div>
   )
 }
