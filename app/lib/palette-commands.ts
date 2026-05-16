@@ -108,6 +108,16 @@ export async function parsePaletteCommand(query: string): Promise<PaletteCommand
     return resolveEscalate(tokens.slice(1).join(" "))
   }
 
+  // disable runbook <name-substring>
+  if (tokens[0] === "disable" && tokens[1] === "runbook" && tokens.length >= 3) {
+    return resolveRunbookVerb(tokens.slice(2).join(" "), "disable")
+  }
+
+  // untrip <runbook-name-substring>
+  if (tokens[0] === "untrip" && tokens.length >= 2) {
+    return resolveRunbookVerb(tokens.slice(1).join(" "), "untrip")
+  }
+
   return []
 }
 
@@ -601,5 +611,46 @@ async function resolveAlertVerb(rest: string, spec: AlertVerbSpec): Promise<Pale
     hint: spec.hint(a),
     href: spec.href(a.id),
     icon: spec.icon,
+  }))
+}
+
+// ─── disable runbook / untrip ────────────────────────────────────────────
+
+async function resolveRunbookVerb(
+  rest: string,
+  verb: "disable" | "untrip",
+): Promise<PaletteCommand[]> {
+  const q = rest.trim().toLowerCase()
+  if (q.length < 2) return []
+
+  // disable scope: any non-disabled runbook. The user clicks
+  // Disable on the destination page.
+  // untrip scope: tripped runbooks only — untripping a non-tripped
+  // one is a no-op, so filtering to only-tripped at search time
+  // saves the operator from picking a useless target.
+  const candidates = await prisma.fl_Runbook.findMany({
+    where: verb === "disable"
+      ? {
+          isActive: true,
+          name: { contains: q, mode: "insensitive" },
+        }
+      : {
+          isTripped: true,
+          name: { contains: q, mode: "insensitive" },
+        },
+    orderBy: { name: "asc" },
+    take: MAX_PER_VERB,
+    select: { id: true, name: true, isTripped: true, isActive: true },
+  })
+
+  return candidates.map((r) => ({
+    id: `cmd:${verb}:runbook:${r.id}`,
+    category: "Commands" as const,
+    label: verb === "disable" ? `Disable runbook — ${r.name}` : `Untrip runbook — ${r.name}`,
+    hint: verb === "disable"
+      ? "Open the runbook page to disable (stops new fires; history kept)"
+      : "Open the runbook page to untrip (clears the circuit breaker)",
+    href: `/runbooks/${r.id}`,
+    icon: verb === "disable" ? "⏸" : "↻",
   }))
 }
