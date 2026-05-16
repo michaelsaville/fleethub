@@ -186,10 +186,80 @@ model Fl_Alert {
   resolvedAt    DateTime?
   createdAt     DateTime  @default(now())
 
+  /// Phase 7 Workstream A — every alert can have N dispatch attempts
+  /// (primary + escalation steps). Cascade-delete so resolved alerts
+  /// don't leave orphan dispatch rows.
+  dispatches    Fl_AlertDispatch[]
+
   @@index([clientName, state, createdAt])
   @@index([deviceId, state])
   @@index([severity, state])
   @@map("fl_alerts")
+  @@schema("fleethub")
+}
+
+/// Phase 7 Workstream A — operator-defined routing rule for Fl_Alert.
+/// Evaluated in priority order at write time; first match wins.
+/// See PHASE-7-DESIGN.md §3.
+model Fl_AlertRoute {
+  id              String   @id @default(cuid())
+  /// Null = applies to every tenant (default-fallback route). A
+  /// specific tenant name takes priority over null entries.
+  tenantName      String?
+  /// JSON match predicate: {severity: "critical"|"warn"|"info"|[...],
+  /// kindLike: "disk.*", deviceTag: "prod"}. Future fields stay
+  /// backward-compatible.
+  matchJson       String
+  /// JSON channel list: [{type: "slack", webhookUrl, ...},
+  /// {type: "sms", phoneNumbers: [...]}, {type: "ticket", board: ...}].
+  channelsJson    String
+  /// JSON escalation chain: [{afterMin: 5, channels: [...]},
+  /// {afterMin: 15, channels: [...]}]. Null = no escalation.
+  escalationJson  String?
+  /// Per-route dedup window. Within this many minutes, a repeat of
+  /// the same (alert.kind, alert.deviceId) is suppressed. 0 = off.
+  dedupWindowMin  Int      @default(15)
+  isActive        Boolean  @default(true)
+  /// Lower priority = evaluated first. Ties broken by createdAt.
+  priority        Int      @default(100)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([tenantName, priority, isActive])
+  @@map("fl_alert_routes")
+  @@schema("fleethub")
+}
+
+/// One row per outbound notification attempt. v1 step 1 ships
+/// escalationStep=0 (primary dispatch); escalation chain lands in
+/// step 4. ackedAt set by the signed-token ack endpoint (step 9).
+model Fl_AlertDispatch {
+  id              String    @id @default(cuid())
+  alertId         String
+  alert           Fl_Alert  @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  /// Null when the dispatch went through the hardcoded default
+  /// fallback (no Fl_AlertRoute matched). Otherwise the matched
+  /// route's id.
+  routeId         String?
+  channel         String    // "slack" | "teams" | "email" | "sms" | "pagerduty" | "ticket"
+  /// Sanitized destination — webhook URL fingerprint, phone tail,
+  /// ticket id, etc. Never the raw secret.
+  destination     String
+  state           String    // "pending" | "sent" | "failed" | "acked" | "skipped-deduped" | "skipped-no-channel"
+  ackedAt         DateTime?
+  ackedBy         String?
+  /// Step in the escalation chain. 0 = primary; 1+ = escalation.
+  escalationStep  Int       @default(0)
+  /// Time after which this dispatch escalates. Null = no further.
+  escalateAt      DateTime?
+  /// External system reference — PD incident id, TH ticket id, etc.
+  externalId      String?
+  errorReason     String?
+  createdAt       DateTime  @default(now())
+
+  @@index([alertId, escalationStep])
+  @@index([state, escalateAt])
+  @@map("fl_alert_dispatches")
   @@schema("fleethub")
 }
 

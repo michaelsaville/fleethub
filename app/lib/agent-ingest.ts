@@ -2,6 +2,7 @@ import "server-only"
 import { z } from "zod"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
+import { writeAlert } from "@/lib/alert-dispatch"
 import { onTargetCompleted } from "@/lib/deployments"
 
 /**
@@ -439,17 +440,13 @@ async function handleAlertFire(env: z.infer<typeof alertFire>): Promise<IngestRe
     agentId: env.agentId,
     isOnline: true,
   })
-  const alert = await prisma.fl_Alert.create({
-    data: {
-      clientName: env.device.clientName,
-      deviceId: device.id,
-      kind: env.alert.kind,
-      severity: env.alert.severity,
-      title: env.alert.title,
-      detailJson: env.alert.detail === undefined ? null : JSON.stringify(env.alert.detail),
-      state: "open",
-    },
-    select: { id: true },
+  const alert = await writeAlert({
+    clientName: env.device.clientName,
+    deviceId: device.id,
+    kind: env.alert.kind,
+    severity: env.alert.severity,
+    title: env.alert.title,
+    detailJson: env.alert.detail === undefined ? null : JSON.stringify(env.alert.detail),
   })
   await writeAudit({
     deviceId: device.id,
@@ -857,21 +854,17 @@ async function handlePatchesAdvisoryFire(env: z.infer<typeof patchesAdvisoryFire
     throw new Error(`patches.advisory.fire: unknown agentId ${env.agentId}`)
   }
 
-  const alert = await prisma.fl_Alert.create({
-    data: {
-      clientName: device.clientName,
-      deviceId: device.id,
-      kind: "patch.advisory",
-      severity: env.classification === "critical" ? "critical" : "warn",
-      title: `Advisory: ${env.kbId}`,
-      detailJson: JSON.stringify({
-        kbId: env.kbId,
-        publishedAt: env.publishedAt ?? null,
-        classification: env.classification ?? "unknown",
-      }),
-      state: "open",
-    },
-    select: { id: true },
+  const alert = await writeAlert({
+    clientName: device.clientName,
+    deviceId: device.id,
+    kind: "patch.advisory",
+    severity: env.classification === "critical" ? "critical" : "warn",
+    title: `Advisory: ${env.kbId}`,
+    detailJson: JSON.stringify({
+      kbId: env.kbId,
+      publishedAt: env.publishedAt ?? null,
+      classification: env.classification ?? "unknown",
+    }),
   })
   await writeAudit({
     deviceId: device.id,

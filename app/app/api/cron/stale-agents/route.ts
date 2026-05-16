@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
+import { writeAlert } from "@/lib/alert-dispatch"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -80,16 +81,13 @@ async function run(req: Request) {
     const lastSeenStr = d.lastSeenAt
       ? `${Math.round((Date.now() - d.lastSeenAt.getTime()) / 1000)}s ago`
       : "never"
-    await prisma.fl_Alert.create({
-      data: {
-        clientName: d.clientName,
-        deviceId: d.id,
-        kind: "agent.disconnected",
-        severity: "warn",
-        title: `Agent offline (last heartbeat ${lastSeenStr})`,
-        detailJson: JSON.stringify({ thresholdSec: STALE_THRESHOLD_SEC }),
-        state: "open",
-      },
+    await writeAlert({
+      clientName: d.clientName,
+      deviceId: d.id,
+      kind: "agent.disconnected",
+      severity: "warn",
+      title: `Agent offline (last heartbeat ${lastSeenStr})`,
+      detailJson: JSON.stringify({ thresholdSec: STALE_THRESHOLD_SEC }),
     })
     await writeAudit({
       deviceId: d.id,

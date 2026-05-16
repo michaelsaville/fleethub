@@ -161,3 +161,76 @@ export function isValidWebhookUrl(s: string, channel: "slack" | "teams"): boolea
   // Teams Incoming Webhooks live under *.webhook.office.com.
   return /\.webhook\.office\.com$/.test(u.hostname) || u.hostname.endsWith("logic.azure.com")
 }
+
+// ─── Phase 7 Workstream A — alert dispatch ───────────────────────────────
+
+const SEVERITY_EMOJI = { critical: "🔴", warn: "🟠", info: "🔵" } as const
+
+interface AlertForDelivery {
+  id: string
+  clientName: string
+  deviceId: string | null
+  kind: string
+  severity: string
+  title: string
+  detailJson: string | null
+}
+
+/**
+ * POST an alert-shaped Block Kit message to a Slack incoming
+ * webhook. Distinct from `deliverToSlack` (which renders the
+ * report-shaped message with thumbnail) — alerts and reports
+ * share the transport but the content differs.
+ */
+export async function postAlertToSlack(
+  webhookUrl: string,
+  alert: AlertForDelivery,
+): Promise<void> {
+  const sev = (SEVERITY_EMOJI as Record<string, string>)[alert.severity] ?? "⚠"
+  const link = `${publicBaseUrl()}/alerts/${alert.id}`
+  const deviceLine = alert.deviceId
+    ? `${publicBaseUrl()}/devices/${alert.deviceId}`
+    : null
+
+  const payload = {
+    text: `${sev} ${alert.severity.toUpperCase()} · ${alert.clientName} · ${alert.title}`,
+    blocks: [
+      {
+        type: "header",
+        text: { type: "plain_text", text: `${sev} ${alert.severity.toUpperCase()} — ${alert.clientName}` },
+      },
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: `*${alert.title}*` },
+      },
+      {
+        type: "section",
+        fields: [
+          { type: "mrkdwn", text: `*Kind*\n\`${alert.kind}\`` },
+          { type: "mrkdwn", text: `*Device*\n${deviceLine ? `<${deviceLine}|view>` : "—"}` },
+        ],
+      },
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "Open in FleetHub" },
+            url: link,
+            style: alert.severity === "critical" ? "danger" : "primary",
+          },
+        ],
+      },
+    ],
+  }
+
+  const res = await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  })
+  if (!res.ok) {
+    throw new Error(`slack webhook returned ${res.status}: ${await res.text().catch(() => "")}`)
+  }
+}
