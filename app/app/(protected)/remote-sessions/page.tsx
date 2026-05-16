@@ -4,6 +4,8 @@ import { requireSession } from "@/lib/authz"
 import { prisma } from "@/lib/prisma"
 import { relativeLastSeen } from "@/lib/devices-time"
 import { rustDeskMode } from "@/lib/rustdesk"
+import { Chip } from "@/components/ui/Chip"
+import type { Tone } from "@/lib/ui-tokens"
 
 export const dynamic = "force-dynamic"
 
@@ -213,33 +215,30 @@ function FilterBar({ stateFilter, clientFilter, operatorFilter, seenClients }: {
   )
 }
 
+// Filter-row chip — distinct from the table-cell <Chip> because
+// filter chips function as toggleable buttons (URL-state),
+// whereas table chips are pure status badges. Active state uses
+// the accent color for affordance.
 function chipStyle(active: boolean): React.CSSProperties {
   return {
     padding: "3px 9px",
     fontSize: 11.5,
     fontWeight: active ? 600 : 500,
     color: active ? "#fff" : "var(--color-text-secondary)",
-    background: active ? "var(--color-accent, #F97316)" : "var(--color-background-secondary)",
+    background: active ? "var(--color-accent)" : "var(--color-background-secondary)",
     border: "0.5px solid var(--color-border-tertiary)",
-    borderRadius: 999,
+    borderRadius: "var(--radius-full)",
     textDecoration: "none",
   }
 }
 
 function stateChip(state: string): React.ReactNode {
-  const map: Record<string, { color: string; bg: string }> = {
-    "in-progress": { color: "var(--color-success, #15803d)", bg: "var(--color-success-soft, rgba(21, 128, 61, 0.15))" },
-    closed:        { color: "var(--color-text-muted)", bg: "var(--color-background-tertiary, rgba(148, 163, 184, 0.18))" },
-    expired:       { color: "var(--color-warning, #b45309)", bg: "var(--color-warning-soft, rgba(234, 179, 8, 0.1))" },
-    revoked:       { color: "var(--color-danger, #b91c1c)", bg: "var(--color-danger-soft, rgba(239, 68, 68, 0.1))" },
-    issued:        { color: "var(--color-text-secondary)", bg: "var(--color-background-tertiary, rgba(148, 163, 184, 0.18))" },
-  }
-  const tone = map[state] ?? map.closed
-  return (
-    <span style={{ padding: "1px 8px", fontSize: 10, fontWeight: 600, borderRadius: 999, background: tone.bg, color: tone.color, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>
-      {state}
-    </span>
-  )
+  const tone: Tone =
+    state === "in-progress" ? "ok" :
+    state === "expired" ? "warn" :
+    state === "revoked" ? "bad" :
+    "neutral"
+  return <Chip tone={tone}>{state}</Chip>
 }
 
 function humanBytes(n: number): string {

@@ -2,6 +2,8 @@ import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import { requireAdmin } from "@/lib/authz"
 import { prisma } from "@/lib/prisma"
+import { EmptyState as UiEmptyState } from "@/components/ui/EmptyState"
+import { Chip } from "@/components/ui/Chip"
 
 export const dynamic = "force-dynamic"
 
@@ -75,24 +77,9 @@ export default async function OncallSchedulesPage() {
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <strong style={{ fontSize: 14 }}>{s.name}</strong>
-                    <span
-                      style={{
-                        padding: "1px 8px",
-                        fontSize: "10px",
-                        fontWeight: 600,
-                        borderRadius: 999,
-                        background: s.isActive
-                          ? "var(--color-success-soft, rgba(21, 128, 61, 0.15))"
-                          : "var(--color-background-tertiary, rgba(148, 163, 184, 0.18))",
-                        color: s.isActive
-                          ? "var(--color-success, #15803d)"
-                          : "var(--color-text-muted)",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                      }}
-                    >
+                    <Chip tone={s.isActive ? "ok" : "neutral"}>
                       {s.isActive ? "active" : "off"}
-                    </span>
+                    </Chip>
                   </div>
                   <div style={{ fontSize: 11.5, color: "var(--color-text-muted)" }}>
                     {slotCount} rotation slot{slotCount === 1 ? "" : "s"}
@@ -110,20 +97,14 @@ export default async function OncallSchedulesPage() {
 
 function EmptyState() {
   return (
-    <div
-      style={{
-        padding: "40px",
-        textAlign: "center",
-        background: "var(--color-background-secondary)",
-        border: "0.5px solid var(--color-border-tertiary)",
-        borderRadius: "10px",
-        color: "var(--color-text-muted)",
-        fontSize: "13px",
-      }}
-    >
-      No on-call schedules yet. Click <strong>+ New schedule</strong>{" "}
-      to add one — the email + SMS channels on alert routes can then
-      reference it for dynamic recipient resolution.
-    </div>
+    <UiEmptyState
+      body={
+        <>
+          No on-call schedules yet. Click <strong>+ New schedule</strong> to
+          add one — the email + SMS channels on alert routes can then
+          reference it for dynamic recipient resolution.
+        </>
+      }
+    />
   )
 }

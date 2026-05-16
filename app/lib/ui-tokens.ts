@@ -83,6 +83,15 @@ export const FIELD: CSSProperties = {
   fontFamily: "inherit",
 }
 
+/** Tighter form-input variant for dense rows where many small
+ *  inputs live side-by-side (e.g. oncall rotation slots: user +
+ *  day + start + end on one line). Same colors as FIELD, just
+ *  tighter padding. */
+export const FIELD_SM: CSSProperties = {
+  ...FIELD,
+  padding: "6px 9px",
+}
+
 /** Canonical table column header (<th>). */
 export const TH: CSSProperties = {
   padding: "8px 12px",

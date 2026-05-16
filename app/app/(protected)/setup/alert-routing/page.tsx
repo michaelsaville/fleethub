@@ -2,6 +2,8 @@ import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import { requireAdmin } from "@/lib/authz"
 import { prisma } from "@/lib/prisma"
+import { EmptyState as UiEmptyState } from "@/components/ui/EmptyState"
+import { Chip } from "@/components/ui/Chip"
 
 export const dynamic = "force-dynamic"
 
@@ -116,24 +118,9 @@ function RoutesTable({ routes }: { routes: Array<{
                 <Td align="left">{describeChannels(ch)}</Td>
                 <Td align="right">{r.dedupWindowMin}m</Td>
                 <Td align="center">
-                  <span
-                    style={{
-                      padding: "1px 8px",
-                      fontSize: "10px",
-                      fontWeight: 600,
-                      borderRadius: 999,
-                      background: r.isActive
-                        ? "var(--color-success-soft, rgba(21, 128, 61, 0.15))"
-                        : "var(--color-background-tertiary, rgba(148, 163, 184, 0.18))",
-                      color: r.isActive
-                        ? "var(--color-success, #15803d)"
-                        : "var(--color-text-muted)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                    }}
-                  >
+                  <Chip tone={r.isActive ? "ok" : "neutral"}>
                     {r.isActive ? "active" : "off"}
-                  </span>
+                  </Chip>
                 </Td>
                 <Td align="right">
                   <Link href={`/setup/alert-routing/${r.id}`} style={{ color: "var(--color-accent, #F97316)", fontWeight: 600, textDecoration: "none" }}>
@@ -202,26 +189,20 @@ function Td({ children, align }: { children: React.ReactNode; align: "left" | "r
 
 function EmptyState() {
   return (
-    <div
-      style={{
-        padding: "40px",
-        textAlign: "center",
-        background: "var(--color-background-secondary)",
-        border: "0.5px solid var(--color-border-tertiary)",
-        borderRadius: "10px",
-        color: "var(--color-text-muted)",
-        fontSize: "13px",
-      }}
-    >
-      No routes yet. Alerts will fall through to{" "}
-      <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "12px" }}>
-        FLEETHUB_DEFAULT_ALERT_WEBHOOK_URL
-      </code>{" "}
-      if set, otherwise be logged as{" "}
-      <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "12px" }}>
-        skipped-no-channel
-      </code>
-      . Click <strong>+ New route</strong> above to start.
-    </div>
+    <UiEmptyState
+      body={
+        <>
+          No routes yet. Alerts will fall through to{" "}
+          <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "12px" }}>
+            FLEETHUB_DEFAULT_ALERT_WEBHOOK_URL
+          </code>{" "}
+          if set, otherwise be logged as{" "}
+          <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "12px" }}>
+            skipped-no-channel
+          </code>
+          . Click <strong>+ New route</strong> above to start.
+        </>
+      }
+    />
   )
 }

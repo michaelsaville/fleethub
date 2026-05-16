@@ -2,6 +2,8 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
+import { FIELD_SM, TYPOGRAPHY, CARD } from "@/lib/ui-tokens"
+import { Button } from "@/components/ui/Button"
 
 // Phase 7 Workstream A step 8 — shared editor for on-call schedules.
 // Rotation grid: pick a user + days + start/end (UTC HH:MM).
@@ -37,15 +39,9 @@ export interface StaffOption {
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const
 
-const FIELD_STYLE: React.CSSProperties = {
-  padding: "6px 9px",
-  fontSize: "13px",
-  background: "var(--color-background-primary, #fff)",
-  color: "var(--color-text-primary)",
-  border: "0.5px solid var(--color-border-secondary, #d4d4d8)",
-  borderRadius: "6px",
-  outline: "none",
-}
+// FIELD_STYLE replaced by canonical FIELD_SM token (compact
+// variant for dense oncall rotation rows) from @/lib/ui-tokens.
+const FIELD_STYLE = FIELD_SM
 
 export default function OncallScheduleForm({
   initial,
@@ -230,21 +226,33 @@ export default function OncallScheduleForm({
 
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
         {isEdit && (
-          <button type="button" onClick={onDelete} disabled={deleting || submitting} style={{ padding: "8px 14px", fontSize: 13, color: "var(--color-danger, #b91c1c)", background: "transparent", border: "0.5px solid var(--color-danger, #b91c1c)", borderRadius: 6, cursor: deleting ? "not-allowed" : "pointer", marginRight: "auto", opacity: deleting ? 0.6 : 1 }}>
+          <Button
+            type="button"
+            variant="danger"
+            onClick={onDelete}
+            disabled={deleting || submitting}
+            style={{ marginRight: "auto", background: "transparent", color: "var(--color-danger)", border: "0.5px solid var(--color-danger)" }}
+          >
             {deleting ? "Deleting…" : "Delete schedule"}
-          </button>
+          </Button>
         )}
-        <Link href="/setup/oncall-schedules" style={{ padding: "8px 14px", fontSize: 13, color: "var(--color-text-secondary)", textDecoration: "none", borderRadius: 6 }}>
+        <Link
+          href="/setup/oncall-schedules"
+          style={{ padding: "8px 14px", fontSize: 13, color: "var(--color-text-secondary)", textDecoration: "none", borderRadius: "var(--radius-sm)" }}
+        >
           Cancel
         </Link>
-        <button type="submit" disabled={submitting} style={{ padding: "8px 16px", fontSize: 13, fontWeight: 600, color: "#fff", background: "var(--color-accent, #F97316)", border: "none", borderRadius: 6, cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}>
+        <Button type="submit" variant="primary" disabled={submitting}>
           {submitting ? "Saving…" : isEdit ? "Save changes" : "Create schedule"}
-        </button>
+        </Button>
       </div>
     </form>
   )
 }
 
+// Dashed "+ Add" button styled as a secondary-with-dashed-border —
+// distinct from the solid Button variants so operators can tell
+// "add row" from "submit form" at a glance.
 const addBtn: React.CSSProperties = {
   padding: "5px 12px",
   fontSize: 12,
@@ -252,14 +260,14 @@ const addBtn: React.CSSProperties = {
   color: "var(--color-text-secondary)",
   background: "var(--color-background-secondary)",
   border: "0.5px dashed var(--color-border-tertiary)",
-  borderRadius: 6,
+  borderRadius: "var(--radius-sm)",
   cursor: "pointer",
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section style={{ display: "flex", flexDirection: "column", gap: 12, padding: "14px 16px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 10 }}>
-      <h2 style={{ fontSize: 12, fontWeight: 600, margin: 0, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{title}</h2>
+    <section style={{ ...CARD, display: "flex", flexDirection: "column", gap: 12, padding: "14px 16px" }}>
+      <h2 style={TYPOGRAPHY.LABEL_CAPS}>{title}</h2>
       {children}
     </section>
   )

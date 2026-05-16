@@ -11,6 +11,8 @@ import { getSessionContext } from "@/lib/authz"
 import RemoteSessionLauncher from "./RemoteSessionLauncher"
 import RustdeskIdEditor from "./RustdeskIdEditor"
 import { markRemoteSessionClosed } from "../../remote-sessions/actions"
+import { Chip } from "@/components/ui/Chip"
+import type { Tone } from "@/lib/ui-tokens"
 
 export const dynamic = "force-dynamic"
 
@@ -1051,19 +1053,12 @@ function RemoteTab({
 }
 
 function remoteSessionStateChip(state: string): React.ReactNode {
-  const map: Record<string, { color: string; bg: string }> = {
-    "in-progress": { color: "var(--color-success, #15803d)", bg: "var(--color-success-soft, rgba(21, 128, 61, 0.15))" },
-    closed:        { color: "var(--color-text-muted)", bg: "var(--color-background-tertiary, rgba(148, 163, 184, 0.18))" },
-    expired:       { color: "var(--color-warning, #b45309)", bg: "var(--color-warning-soft, rgba(234, 179, 8, 0.1))" },
-    revoked:       { color: "var(--color-danger, #b91c1c)", bg: "var(--color-danger-soft, rgba(239, 68, 68, 0.1))" },
-    issued:        { color: "var(--color-text-secondary)", bg: "var(--color-background-tertiary, rgba(148, 163, 184, 0.18))" },
-  }
-  const tone = map[state] ?? map.closed
-  return (
-    <span style={{ padding: "1px 8px", fontSize: 10, fontWeight: 600, borderRadius: 999, background: tone.bg, color: tone.color, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>
-      {state}
-    </span>
-  )
+  const tone: Tone =
+    state === "in-progress" ? "ok" :
+    state === "expired" ? "warn" :
+    state === "revoked" ? "bad" :
+    "neutral"
+  return <Chip tone={tone}>{state}</Chip>
 }
 
 function humanBytes(n: number): string {
