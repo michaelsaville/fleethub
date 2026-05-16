@@ -19,6 +19,17 @@
   --color-warning-soft: rgba(202, 138, 4, 0.10);
   --color-danger: #dc2626;
   --color-danger-soft: rgba(220, 38, 38, 0.10);
+  /* Phase 8 — KEV (Known Exploited Vulnerability) tone. Deeper red
+     than danger so the highest-risk patches stand out from generic
+     critical alerts in the same view. */
+  --color-kev: #7f1d1d;
+  --color-kev-soft: rgba(127, 29, 29, 0.12);
+
+  /* Phase 8 design system — radius scale. Use these instead of
+     inline 6/8/10. */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-full: 9999px;
 }
 
 html, body {
