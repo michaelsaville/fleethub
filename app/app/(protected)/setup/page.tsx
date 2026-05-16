@@ -52,11 +52,12 @@ export default async function SetupPage() {
             disabled
           />
           <SetupCard
-            href="#"
+            href="/setup/alert-routing"
             label="Alert routing"
-            status="Phase 1"
-            description="Per-client severity thresholds, on-call rotation, mute windows."
-            disabled
+            status={isAdmin ? "live" : "ADMIN-only"}
+            description="Where alerts go when they fire. Per-tenant Slack/Teams/email channels, severity + kind match, dedup."
+            disabled={!isAdmin}
+            disabledHint={!isAdmin ? "ADMIN-only" : undefined}
           />
           <SetupCard
             href="/audit"
