@@ -467,6 +467,41 @@ model Fl_Monitor {
   @@schema("fleethub")
 }
 
+/// Phase 8 Workstream A step 4 — inbound webhook endpoint for
+/// third-party tools (UptimeRobot, Datadog, Sentry, …). Each row
+/// owns its own opaque token at `/api/inbound/<token>`. A per-tool
+/// mapper translates the incoming payload to the Fl_Alert shape,
+/// then writeAlert() pipes into the existing routing.
+model Fl_InboundWebhook {
+  id              String    @id @default(cuid())
+  name            String    // "Acme UptimeRobot"
+  tenantName      String    // posts route to this tenant's channels
+  /// Bounded source set — one mapper per source under
+  /// app/lib/inbound-mappers/. New tools = new mapper file + a row.
+  source          String    // "uptimerobot" | "datadog" | "sentry" | "generic"
+  /// Opaque cuid-ish. Stored in plaintext because it IS the bearer —
+  /// the URL `/api/inbound/<token>` is the only auth surface for
+  /// sources that don't sign their requests.
+  token           String    @unique
+  /// JSON config the mapper consumes (severity-map overrides, kind
+  /// prefixes, HMAC secret for sources that sign requests, etc.).
+  /// Shape varies per source.
+  configJson      String?
+  isActive        Boolean   @default(true)
+  lastFiredAt     DateTime?
+  lastErrorAt     DateTime?
+  lastError       String?
+  fireCount       Int       @default(0)
+  errorCount      Int       @default(0)
+  createdBy       String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([source, isActive])
+  @@map("fl_inbound_webhooks")
+  @@schema("fleethub")
+}
+
 /// Phase 8 Workstream A — per-(monitor, device) fire history.
 /// Drives the recent-firings table on the monitor detail page +
 /// is the cooldown lookup target (last fire per device).
