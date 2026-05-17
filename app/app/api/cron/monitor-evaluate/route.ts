@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { evaluateMonitors } from "@/lib/monitor-evaluator"
+import { withCronAuth } from "@/lib/with-cron-auth"
 
 // Phase 8 Workstream A step 1 — monitor evaluator cron.
 //
@@ -17,19 +18,7 @@ import { evaluateMonitors } from "@/lib/monitor-evaluator"
 export const dynamic = "force-dynamic"
 export const maxDuration = 120
 
-export async function GET(req: NextRequest) {
-  return run(req)
-}
-export async function POST(req: NextRequest) {
-  return run(req)
-}
-
-async function run(req: NextRequest): Promise<NextResponse> {
-  const auth = req.headers.get("authorization") ?? ""
-  const secret = process.env.FLEETHUB_AGENT_SECRET ?? ""
-  if (!secret || auth !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 })
-  }
+const handler = withCronAuth<NextRequest>(async (req) => {
 
   const startedAt = Date.now()
   try {
@@ -49,4 +38,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
       { status: 500 },
     )
   }
-}
+})
+
+export const GET = handler
+export const POST = handler

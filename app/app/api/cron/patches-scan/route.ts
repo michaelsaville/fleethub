@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { dispatchPatchScanAll } from "@/lib/patch-deploy"
+import { withCronAuth } from "@/lib/with-cron-auth"
 
 // Cron-callable patches.scan fan-out. Bearer-gated with
 // FLEETHUB_AGENT_SECRET (same as /api/cron/cve-refresh + stale-agents).
@@ -14,23 +15,14 @@ import { dispatchPatchScanAll } from "@/lib/patch-deploy"
 export const maxDuration = 600
 export const dynamic = "force-dynamic"
 
-export async function GET(req: NextRequest) {
-  return run(req)
-}
-export async function POST(req: NextRequest) {
-  return run(req)
-}
-
-async function run(req: NextRequest): Promise<NextResponse> {
-  const auth = req.headers.get("authorization") ?? ""
-  const expected = `Bearer ${process.env.FLEETHUB_AGENT_SECRET ?? ""}`
-  if (!process.env.FLEETHUB_AGENT_SECRET || auth !== expected) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 })
-  }
+const handler = withCronAuth<NextRequest>(async (req) => {
   const results = await dispatchPatchScanAll()
   return NextResponse.json({
     dispatched: results.filter((r) => r.ok).length,
     failed: results.filter((r) => !r.ok).length,
     results,
   })
-}
+})
+
+export const GET = handler
+export const POST = handler

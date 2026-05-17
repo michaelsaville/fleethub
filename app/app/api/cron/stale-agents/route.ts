@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { writeAlert } from "@/lib/alert-dispatch"
+import { withCronAuth } from "@/lib/with-cron-auth"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -28,23 +29,7 @@ export const runtime = "nodejs"
 
 const STALE_THRESHOLD_SEC = 90
 
-export async function POST(req: Request) {
-  return run(req)
-}
-export async function GET(req: Request) {
-  return run(req)
-}
-
-async function run(req: Request) {
-  const secret = process.env.FLEETHUB_AGENT_SECRET
-  if (!secret) {
-    return NextResponse.json({ error: "cron-not-configured" }, { status: 503 })
-  }
-  const auth = req.headers.get("authorization") ?? ""
-  if (!auth.startsWith("Bearer ") || auth.slice(7) !== secret) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 })
-  }
-
+const handler = withCronAuth(async () => {
   const cutoff = new Date(Date.now() - STALE_THRESHOLD_SEC * 1000)
   const stale = await prisma.fl_Device.findMany({
     where: {
@@ -100,4 +85,7 @@ async function run(req: Request) {
   }
 
   return NextResponse.json({ ok: true, marked: stale.length, alerted })
-}
+})
+
+export const GET = handler
+export const POST = handler

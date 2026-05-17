@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { writeAlert } from "@/lib/alert-dispatch"
-import { AV_ENGINES, checkAgentAuth } from "@/lib/posture"
+import { AV_ENGINES } from "@/lib/posture"
+import { withCronAuth } from "@/lib/with-cron-auth"
 
 export const dynamic = "force-dynamic"
 
@@ -32,10 +33,7 @@ interface Body {
   warrantyExpiresAt?: string | null
 }
 
-export async function POST(req: NextRequest) {
-  const auth = checkAgentAuth(req.headers.get("authorization"))
-  if (!auth.ok) return NextResponse.json({ error: auth.reason }, { status: auth.status })
-
+export const POST = withCronAuth<NextRequest>(async (req) => {
   let body: Body
   try { body = (await req.json()) as Body } catch {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 })
@@ -134,7 +132,7 @@ export async function POST(req: NextRequest) {
   }).catch(() => undefined)
 
   return NextResponse.json({ ok: true, alertId })
-}
+})
 
 function parseIso(s: string | null | undefined, fieldName: string): Date | null | Error {
   if (s === null || s === undefined || s === "") return null

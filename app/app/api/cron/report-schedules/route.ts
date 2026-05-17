@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { fireDueSchedules } from "@/lib/report-schedule"
+import { withCronAuth } from "@/lib/with-cron-auth"
 
 // Bearer-gated cron worker for Fl_ReportSchedule. Per PHASE-5-DESIGN §5.
 // Same FLEETHUB_AGENT_SECRET pattern as the other cron endpoints.
@@ -19,19 +20,7 @@ import { fireDueSchedules } from "@/lib/report-schedule"
 export const maxDuration = 300
 export const dynamic = "force-dynamic"
 
-export async function GET(req: NextRequest) {
-  return run(req)
-}
-export async function POST(req: NextRequest) {
-  return run(req)
-}
-
-async function run(req: NextRequest): Promise<NextResponse> {
-  const auth = req.headers.get("authorization") ?? ""
-  const secret = process.env.FLEETHUB_AGENT_SECRET ?? ""
-  if (!secret || auth !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 })
-  }
+const handler = withCronAuth<NextRequest>(async (req) => {
   try {
     const result = await fireDueSchedules()
     return NextResponse.json({
@@ -44,4 +33,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
     console.error("[cron/report-schedules] failed:", msg)
     return NextResponse.json({ ok: false, error: msg }, { status: 500 })
   }
-}
+})
+
+export const GET = handler
+export const POST = handler

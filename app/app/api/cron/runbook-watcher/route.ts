@@ -4,6 +4,7 @@ import { writeAudit } from "@/lib/audit"
 import { tripRunbook } from "@/lib/runbook-evaluator"
 import { evaluatePredicate } from "@/lib/runbook-predicate"
 import { runScript } from "@/lib/script-commands"
+import { withCronAuth } from "@/lib/with-cron-auth"
 
 // Phase 7 Workstream B step 4 — runbook watcher cron.
 //
@@ -24,19 +25,7 @@ export const maxDuration = 120
 const BATCH = 200
 const SCRIPT_TERMINAL_STATES = new Set(["ok", "error", "timeout", "cancelled", "rejected"])
 
-export async function GET(req: NextRequest) {
-  return run(req)
-}
-export async function POST(req: NextRequest) {
-  return run(req)
-}
-
-async function run(req: NextRequest): Promise<NextResponse> {
-  const auth = req.headers.get("authorization") ?? ""
-  const secret = process.env.FLEETHUB_AGENT_SECRET ?? ""
-  if (!secret || auth !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 })
-  }
+const handler = withCronAuth<NextRequest>(async (req) => {
 
   const now = new Date()
   const pending = await prisma.fl_RunbookFire.findMany({
@@ -140,7 +129,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
     tripped,
     errors,
   })
-}
+})
 
 type DryRunOutcome = "advanced-to-running" | "predicate-failed" | "dry-failed" | "still-waiting"
 
@@ -302,3 +291,6 @@ async function checkConsecutiveFailures(runbookId: string): Promise<boolean> {
   })
   return true
 }
+
+export const GET = handler
+export const POST = handler

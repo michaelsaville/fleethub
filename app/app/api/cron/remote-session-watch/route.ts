@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { queryRustDeskSession, rustDeskMode, RustDeskFreeMode } from "@/lib/rustdesk"
+import { withCronAuth } from "@/lib/with-cron-auth"
 
 // Phase 7 Workstream C step 2 — remote session watcher cron.
 //
@@ -29,19 +30,7 @@ export const maxDuration = 60
 
 const BATCH = 100
 
-export async function GET(req: NextRequest) {
-  return run(req)
-}
-export async function POST(req: NextRequest) {
-  return run(req)
-}
-
-async function run(req: NextRequest): Promise<NextResponse> {
-  const auth = req.headers.get("authorization") ?? ""
-  const secret = process.env.FLEETHUB_AGENT_SECRET ?? ""
-  if (!secret || auth !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 })
-  }
+const handler = withCronAuth<NextRequest>(async (req) => {
 
   const now = new Date()
   const mode = rustDeskMode()
@@ -115,4 +104,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
     closed,
     errors,
   })
-}
+})
+
+export const GET = handler
+export const POST = handler

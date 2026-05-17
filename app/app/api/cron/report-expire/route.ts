@@ -4,6 +4,7 @@ import path from "node:path"
 import { prisma } from "@/lib/prisma"
 import { REPORTS_DIR } from "@/lib/reports/render"
 import { writeAudit } from "@/lib/audit"
+import { withCronAuth } from "@/lib/with-cron-auth"
 
 // Phase 5 step 13 — Fl_Report retention sweep.
 //
@@ -30,19 +31,7 @@ interface ExpireOutcome {
   reason?: string
 }
 
-export async function GET(req: NextRequest) {
-  return run(req)
-}
-export async function POST(req: NextRequest) {
-  return run(req)
-}
-
-async function run(req: NextRequest): Promise<NextResponse> {
-  const auth = req.headers.get("authorization") ?? ""
-  const secret = process.env.FLEETHUB_AGENT_SECRET ?? ""
-  if (!secret || auth !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 })
-  }
+const handler = withCronAuth<NextRequest>(async (req) => {
 
   const now = new Date()
   // The @@index([state, retentionUntil]) on Fl_Report exists for this
@@ -125,4 +114,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
     errors: outcomes.filter((o) => o.state === "error").length,
     outcomes,
   })
-}
+})
+
+export const GET = handler
+export const POST = handler
