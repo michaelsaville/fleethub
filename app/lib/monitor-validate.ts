@@ -1,10 +1,59 @@
 import "server-only"
+import { z } from "zod"
 import { SUPPORTED_METRICS } from "@/lib/monitor-evaluator"
+import { SeverityEnum } from "@/lib/schemas"
 
-// Phase 8 Workstream A step 3 — validator for new-monitor payloads.
-// Keeps the API route thin; returns a structured discriminated result
-// so the route can echo the operator's first mistake without a
-// generic 400.
+// Phase 8 Workstream C §5.3 — composed-from-schemas validator.
+// Same external API as the hand-written monitor validator.
+
+const EMIT_KIND_RE = /^[a-z0-9._-]+$/
+
+const Predicate = z.object({
+  operator: z.enum(["lt", "gt", "eq", "neq"]),
+  value: z
+    .number()
+    .refine((n) => Number.isFinite(n), "predicate.value must be a finite number"),
+  osFilter: z
+    .preprocess((v) => (v === "" || v === null ? undefined : v), z.enum(["windows", "linux", "darwin"]).optional()),
+  deviceTag: z
+    .preprocess((v) => {
+      if (typeof v !== "string") return undefined
+      const t = v.trim()
+      return t || undefined
+    }, z.string().optional()),
+  forMin: z
+    .number()
+    .int()
+    .min(1, "predicate.forMin must be between 1 and 1440")
+    .max(1440, "predicate.forMin must be between 1 and 1440")
+    .optional(),
+})
+
+const MetricEnum = z.string().refine(
+  (s) => (SUPPORTED_METRICS as readonly string[]).includes(s),
+  { message: `metric must be one of: ${SUPPORTED_METRICS.join(", ")}` },
+)
+
+const PayloadSchema = z.object({
+  name: z.string().trim().min(1, "name is required").max(120, "name must be 120 characters or fewer"),
+  tenantName: z
+    .preprocess((v) => {
+      if (v === undefined || v === null || v === "") return null
+      if (typeof v === "string") return v.trim() || null
+      throw new Error("tenantName must be a string or null")
+    }, z.string().nullable())
+    .optional()
+    .default(null),
+  metric: MetricEnum,
+  predicate: Predicate,
+  severity: SeverityEnum,
+  emitKind: z
+    .preprocess((v) => (typeof v === "string" ? v.trim() : ""), z.string())
+    .optional()
+    .default(""),
+  cooldownMin: z.coerce.number().int().min(0).max(1440).optional().default(30),
+  isActive: z.coerce.boolean().optional().default(true),
+})
 
 export interface MonitorPayload {
   name: string
@@ -27,81 +76,30 @@ export type ValidateResult =
   | ({ ok: true } & MonitorPayload)
   | { ok: false; reason: string }
 
-const VALID_OPS = new Set(["lt", "gt", "eq", "neq"])
-const VALID_OS = new Set(["windows", "linux", "darwin"])
-const VALID_SEVERITY = new Set(["critical", "warn", "info"])
-const EMIT_KIND_RE = /^[a-z0-9._-]+$/
-
 export function validateMonitorPayload(raw: unknown): ValidateResult {
   if (!raw || typeof raw !== "object") {
     return { ok: false, reason: "Body must be a JSON object" }
   }
-  const r = raw as Record<string, unknown>
-
-  const name = typeof r.name === "string" ? r.name.trim() : ""
-  if (!name) return { ok: false, reason: "name is required" }
-  if (name.length > 120) return { ok: false, reason: "name must be 120 characters or fewer" }
-
-  const tenantNameRaw = r.tenantName
-  let tenantName: string | null
-  if (tenantNameRaw === null || tenantNameRaw === undefined || tenantNameRaw === "") {
-    tenantName = null
-  } else if (typeof tenantNameRaw === "string") {
-    tenantName = tenantNameRaw.trim() || null
-  } else {
-    return { ok: false, reason: "tenantName must be a string or null" }
-  }
-
-  const metric = typeof r.metric === "string" ? r.metric : ""
-  if (!SUPPORTED_METRICS.includes(metric)) {
-    return { ok: false, reason: `metric must be one of: ${SUPPORTED_METRICS.join(", ")}` }
-  }
-
-  const pRaw = r.predicate
-  if (!pRaw || typeof pRaw !== "object") {
-    return { ok: false, reason: "predicate object required" }
-  }
-  const p = pRaw as Record<string, unknown>
-  const operator = typeof p.operator === "string" ? p.operator : ""
-  if (!VALID_OPS.has(operator)) {
-    return { ok: false, reason: 'predicate.operator must be "lt", "gt", "eq", or "neq"' }
-  }
-  if (typeof p.value !== "number" || !Number.isFinite(p.value)) {
-    return { ok: false, reason: "predicate.value must be a finite number" }
-  }
-  let osFilter: "windows" | "linux" | "darwin" | undefined
-  if (p.osFilter !== undefined && p.osFilter !== null && p.osFilter !== "") {
-    if (typeof p.osFilter !== "string" || !VALID_OS.has(p.osFilter)) {
-      return { ok: false, reason: 'predicate.osFilter must be "windows", "linux", "darwin", or empty' }
+  let parsed: z.infer<typeof PayloadSchema>
+  try {
+    parsed = PayloadSchema.parse(raw)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return { ok: false, reason: firstReason(err) }
     }
-    osFilter = p.osFilter as "windows" | "linux" | "darwin"
-  }
-  let deviceTag: string | undefined
-  if (p.deviceTag !== undefined && p.deviceTag !== null && p.deviceTag !== "") {
-    if (typeof p.deviceTag !== "string") {
-      return { ok: false, reason: "predicate.deviceTag must be a string" }
-    }
-    deviceTag = p.deviceTag.trim() || undefined
-  }
-  let forMin: number | undefined
-  if (p.forMin !== undefined && p.forMin !== null) {
-    if (typeof p.forMin !== "number" || !Number.isFinite(p.forMin) || p.forMin < 1 || p.forMin > 1440) {
-      return { ok: false, reason: "predicate.forMin must be between 1 and 1440" }
-    }
-    forMin = Math.round(p.forMin)
+    return { ok: false, reason: err instanceof Error ? err.message : "invalid payload" }
   }
 
-  const severity = typeof r.severity === "string" ? r.severity : ""
-  if (!VALID_SEVERITY.has(severity)) {
-    return { ok: false, reason: 'severity must be "critical", "warn", or "info"' }
-  }
-
-  let emitKind = typeof r.emitKind === "string" ? r.emitKind.trim() : ""
+  // Derive emitKind default from name when caller didn't supply one.
+  let emitKind = parsed.emitKind
   if (!emitKind) {
-    // Default — sanitize the name into a dotted slug behind a stable
-    // prefix so route matching is predictable when the operator
-    // didn't write a custom kind.
-    emitKind = `monitor.${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "untitled"}`
+    emitKind = `monitor.${
+      parsed.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 60) || "untitled"
+    }`
   }
   if (!EMIT_KIND_RE.test(emitKind)) {
     return {
@@ -113,26 +111,22 @@ export function validateMonitorPayload(raw: unknown): ValidateResult {
     return { ok: false, reason: "emitKind must be 100 characters or fewer" }
   }
 
-  let cooldownMin: number
-  if (r.cooldownMin === undefined || r.cooldownMin === null) {
-    cooldownMin = 30
-  } else if (typeof r.cooldownMin !== "number" || !Number.isFinite(r.cooldownMin) || r.cooldownMin < 0 || r.cooldownMin > 1440) {
-    return { ok: false, reason: "cooldownMin must be between 0 and 1440" }
-  } else {
-    cooldownMin = Math.round(r.cooldownMin)
-  }
-
-  const isActive = r.isActive === false ? false : true
-
   return {
     ok: true,
-    name,
-    tenantName,
-    metric,
-    predicate: { operator: operator as "lt" | "gt" | "eq" | "neq", value: p.value as number, osFilter, deviceTag, forMin },
-    severity: severity as "critical" | "warn" | "info",
+    name: parsed.name,
+    tenantName: parsed.tenantName,
+    metric: parsed.metric,
+    predicate: parsed.predicate,
+    severity: parsed.severity,
     emitKind,
-    cooldownMin,
-    isActive,
+    cooldownMin: parsed.cooldownMin,
+    isActive: parsed.isActive,
   }
+}
+
+function firstReason(err: z.ZodError): string {
+  const first = err.issues[0]
+  if (!first) return "invalid payload"
+  const path = first.path.length > 0 ? `${first.path.join(".")}: ` : ""
+  return `${path}${first.message}`
 }

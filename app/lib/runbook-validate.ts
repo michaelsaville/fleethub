@@ -1,11 +1,9 @@
 import "server-only"
+import { z } from "zod"
+import { normalizeMatch, type Severity } from "@/lib/schemas"
 
-// Phase 7 Workstream B step 3 — Fl_Runbook payload validator.
-// Shared by POST + PATCH so the create and edit paths apply
-// identical rules.
-
-type Severity = "critical" | "warn" | "info"
-const SEVERITY_VALUES: readonly Severity[] = ["critical", "warn", "info"]
+// Phase 8 Workstream C §5.3 — composed-from-schemas validator.
+// Same external API as the pre-zod hand-written runbook validator.
 
 export interface NormalizedMatch {
   severity?: Severity[]
@@ -31,85 +29,90 @@ export type ValidateResult =
   | ValidRunbookPayload
   | { ok: false; reason: string }
 
-export function validateRunbookPayload(body: Record<string, unknown>): ValidateResult {
-  const name = typeof body.name === "string" ? body.name.trim() : ""
-  if (!name) return { ok: false, reason: "name is required" }
-  if (name.length > 80) return { ok: false, reason: "name must be 80 characters or fewer" }
-
-  const description = typeof body.description === "string" && body.description.trim()
-    ? body.description.trim().slice(0, 500)
-    : null
-
-  const scriptId = typeof body.scriptId === "string" ? body.scriptId.trim() : ""
-  if (!scriptId) return { ok: false, reason: "scriptId is required" }
-
-  const matchIn = (body.match ?? {}) as Record<string, unknown>
-  const severityIn = matchIn.severity
-  const severity: Severity[] = []
-  if (Array.isArray(severityIn)) {
-    for (const s of severityIn) {
-      if (typeof s === "string" && (SEVERITY_VALUES as readonly string[]).includes(s)) {
-        severity.push(s as Severity)
-      }
-    }
-  } else if (typeof severityIn === "string" && (SEVERITY_VALUES as readonly string[]).includes(severityIn)) {
-    severity.push(severityIn as Severity)
-  }
-  const kindLikeRaw = typeof matchIn.kindLike === "string" ? matchIn.kindLike.trim() : ""
-  if (kindLikeRaw.length > 200) {
-    return { ok: false, reason: "match.kindLike must be 200 characters or fewer" }
-  }
-  const match: NormalizedMatch = {}
-  if (severity.length > 0) match.severity = severity
-  if (kindLikeRaw) match.kindLike = kindLikeRaw
-
-  if (severity.length === 0 && !kindLikeRaw) {
-    return { ok: false, reason: "match must include at least a severity or a kindLike — an unbounded runbook would fire on every alert" }
-  }
-
-  const graceMin = clampInt(body.graceMin, 0, 1440, 2)
-  const cooldownMin = clampInt(body.cooldownMin, 0, 1440, 30)
-  const maxFiresPerHour = clampInt(body.maxFiresPerHour, 1, 1000, 10)
-  const maxConsecutiveFailures = clampInt(body.maxConsecutiveFailures, 1, 100, 3)
-  const dryRunFirst = body.dryRunFirst !== false
-
-  // dryRunPredicateJson is opaque to v1 step 3 — we just validate
-  // it parses. Step 5 introduces the predicate schema + evaluator.
-  let dryRunPredicateJson: string | null = null
-  if (typeof body.dryRunPredicate === "string" && body.dryRunPredicate.trim()) {
-    const raw = body.dryRunPredicate.trim()
+// dryRunPredicate may arrive as either a string (already-stringified
+// JSON) or as a parsed object. The schema normalizes to a stored
+// string or null; we still validate that the string parses.
+const DryRunPredicate = z.preprocess((v) => {
+  if (v === undefined || v === null) return null
+  if (typeof v === "string") {
+    const t = v.trim()
+    if (!t) return null
     try {
-      JSON.parse(raw)
+      JSON.parse(t)
     } catch {
-      return { ok: false, reason: "dryRunPredicate must be valid JSON (leave blank to omit)" }
+      throw new Error("dryRunPredicate must be valid JSON (leave blank to omit)")
     }
-    if (raw.length > 2000) return { ok: false, reason: "dryRunPredicate must be 2000 characters or fewer" }
-    dryRunPredicateJson = raw
-  } else if (body.dryRunPredicate && typeof body.dryRunPredicate === "object") {
-    // Allow client to send a parsed object too.
-    dryRunPredicateJson = JSON.stringify(body.dryRunPredicate)
+    if (t.length > 2000) throw new Error("dryRunPredicate must be 2000 characters or fewer")
+    return t
+  }
+  if (typeof v === "object") return JSON.stringify(v)
+  return null
+}, z.string().nullable())
+
+const RunbookPayload = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, "name is required")
+    .max(80, "name must be 80 characters or fewer"),
+  description: z
+    .preprocess((v) => {
+      if (typeof v !== "string") return null
+      const t = v.trim()
+      return t ? t.slice(0, 500) : null
+    }, z.string().nullable())
+    .optional()
+    .default(null),
+  scriptId: z.string().trim().min(1, "scriptId is required"),
+  match: z.any().optional(),
+  graceMin: z.coerce.number().int().min(0).max(1440).optional().default(2),
+  cooldownMin: z.coerce.number().int().min(0).max(1440).optional().default(30),
+  maxFiresPerHour: z.coerce.number().int().min(1).max(1000).optional().default(10),
+  maxConsecutiveFailures: z.coerce.number().int().min(1).max(100).optional().default(3),
+  dryRunFirst: z.coerce.boolean().optional().default(true),
+  dryRunPredicate: DryRunPredicate.optional().default(null),
+  isActive: z.coerce.boolean().optional().default(true),
+})
+
+export function validateRunbookPayload(body: Record<string, unknown>): ValidateResult {
+  let parsed: z.infer<typeof RunbookPayload>
+  try {
+    parsed = RunbookPayload.parse(body)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return { ok: false, reason: firstReason(err) }
+    }
+    return { ok: false, reason: err instanceof Error ? err.message : "invalid payload" }
   }
 
-  const isActive = body.isActive !== false
+  const match = normalizeMatch(parsed.match)
+  if (!match.severity && !match.kindLike) {
+    return {
+      ok: false,
+      reason:
+        "match must include at least a severity or a kindLike — an unbounded runbook would fire on every alert",
+    }
+  }
 
   return {
     ok: true,
-    name,
-    description,
+    name: parsed.name,
+    description: parsed.description,
     match,
-    scriptId,
-    graceMin,
-    cooldownMin,
-    dryRunFirst,
-    dryRunPredicateJson,
-    maxFiresPerHour,
-    maxConsecutiveFailures,
-    isActive,
+    scriptId: parsed.scriptId,
+    graceMin: parsed.graceMin,
+    cooldownMin: parsed.cooldownMin,
+    dryRunFirst: parsed.dryRunFirst,
+    dryRunPredicateJson: parsed.dryRunPredicate,
+    maxFiresPerHour: parsed.maxFiresPerHour,
+    maxConsecutiveFailures: parsed.maxConsecutiveFailures,
+    isActive: parsed.isActive,
   }
 }
 
-function clampInt(v: unknown, lo: number, hi: number, fallback: number): number {
-  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN
-  if (!Number.isFinite(n)) return fallback
-  return Math.max(lo, Math.min(hi, Math.floor(n)))
+function firstReason(err: z.ZodError): string {
+  const first = err.issues[0]
+  if (!first) return "invalid payload"
+  const path = first.path.length > 0 ? `${first.path.join(".")}: ` : ""
+  return `${path}${first.message}`
 }

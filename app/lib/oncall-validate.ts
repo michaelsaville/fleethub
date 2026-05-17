@@ -1,9 +1,9 @@
 import "server-only"
+import { z } from "zod"
+import { HHMM } from "@/lib/schemas"
 
-// Phase 7 Workstream A step 8 — Fl_OncallSchedule payload validator.
-// Shared by POST + PATCH so create + edit apply identical rules.
-
-const HHMM_RE = /^([01]?\d|2[0-3]):[0-5]\d$/
+// Phase 8 Workstream C §5.3 — composed-from-schemas validator.
+// Same external API as the pre-zod hand-written schedule validator.
 
 export interface NormalizedSlot {
   userId: string
@@ -13,8 +13,8 @@ export interface NormalizedSlot {
 }
 export interface NormalizedOverride {
   userId: string
-  start: string  // ISO
-  end: string    // ISO
+  start: string
+  end: string
   reason: string | null
 }
 
@@ -28,68 +28,51 @@ export interface ValidSchedulePayload {
 
 export type ValidateResult = ValidSchedulePayload | { ok: false; reason: string }
 
+const Slot = z.object({
+  userId: z.string().min(1, "userId required"),
+  dayOfWeek: z.number().int().min(0, "dayOfWeek must be 0-6 (Sun=0)").max(6, "dayOfWeek must be 0-6 (Sun=0)"),
+  start: HHMM,
+  end: HHMM,
+})
+
+// Overrides are ISO timestamps validated by parseability + end>start.
+const Override = z
+  .object({
+    userId: z.string().min(1, "userId required"),
+    start: z.string().refine((s) => Number.isFinite(Date.parse(s)), "start must be a parseable ISO date"),
+    end: z.string().refine((s) => Number.isFinite(Date.parse(s)), "end must be a parseable ISO date"),
+    reason: z
+      .preprocess(
+        (v) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 200) : null),
+        z.string().nullable(),
+      )
+      .optional()
+      .default(null),
+  })
+  .refine((o) => Date.parse(o.end) > Date.parse(o.start), "end must be AFTER start")
+
+const SchedulePayload = z.object({
+  name: z.string().trim().min(1, "name is required").max(80, "name must be 80 characters or fewer"),
+  rotation: z.array(Slot).max(60, "max 60 rotation slots per schedule"),
+  overrides: z.array(Override).max(60, "max 60 overrides per schedule").optional().default([]),
+  isActive: z.coerce.boolean().optional().default(true),
+})
+
 export function validateSchedulePayload(body: Record<string, unknown>): ValidateResult {
-  const name = typeof body.name === "string" ? body.name.trim() : ""
-  if (!name) return { ok: false, reason: "name is required" }
-  if (name.length > 80) return { ok: false, reason: "name must be 80 characters or fewer" }
-
-  if (!Array.isArray(body.rotation)) {
-    return { ok: false, reason: "rotation must be an array of slot objects" }
+  const parsed = SchedulePayload.safeParse(body)
+  if (!parsed.success) return { ok: false, reason: firstReason(parsed.error) }
+  return {
+    ok: true,
+    name: parsed.data.name,
+    rotation: parsed.data.rotation,
+    overrides: parsed.data.overrides,
+    isActive: parsed.data.isActive,
   }
-  if (body.rotation.length > 60) {
-    return { ok: false, reason: "max 60 rotation slots per schedule" }
-  }
-  const rotation: NormalizedSlot[] = []
-  for (let i = 0; i < body.rotation.length; i++) {
-    const s = body.rotation[i] as Record<string, unknown> | null
-    if (!s || typeof s !== "object") {
-      return { ok: false, reason: `rotation slot ${i + 1}: not an object` }
-    }
-    const userId = typeof s.userId === "string" ? s.userId : ""
-    if (!userId) return { ok: false, reason: `rotation slot ${i + 1}: userId required` }
-    const dow = typeof s.dayOfWeek === "number" ? s.dayOfWeek : -1
-    if (!Number.isInteger(dow) || dow < 0 || dow > 6) {
-      return { ok: false, reason: `rotation slot ${i + 1}: dayOfWeek must be 0-6 (Sun=0)` }
-    }
-    const start = typeof s.start === "string" ? s.start : ""
-    const end = typeof s.end === "string" ? s.end : ""
-    if (!HHMM_RE.test(start)) {
-      return { ok: false, reason: `rotation slot ${i + 1}: start must be "HH:MM" UTC` }
-    }
-    if (!HHMM_RE.test(end)) {
-      return { ok: false, reason: `rotation slot ${i + 1}: end must be "HH:MM" UTC` }
-    }
-    rotation.push({ userId, dayOfWeek: dow, start, end })
-  }
+}
 
-  const overrides: NormalizedOverride[] = []
-  if (Array.isArray(body.overrides)) {
-    if (body.overrides.length > 60) {
-      return { ok: false, reason: "max 60 overrides per schedule" }
-    }
-    for (let i = 0; i < body.overrides.length; i++) {
-      const o = body.overrides[i] as Record<string, unknown> | null
-      if (!o || typeof o !== "object") {
-        return { ok: false, reason: `override ${i + 1}: not an object` }
-      }
-      const userId = typeof o.userId === "string" ? o.userId : ""
-      if (!userId) return { ok: false, reason: `override ${i + 1}: userId required` }
-      const start = typeof o.start === "string" ? o.start : ""
-      const end = typeof o.end === "string" ? o.end : ""
-      const startMs = Date.parse(start)
-      const endMs = Date.parse(end)
-      if (!Number.isFinite(startMs)) {
-        return { ok: false, reason: `override ${i + 1}: start must be a parseable ISO date` }
-      }
-      if (!Number.isFinite(endMs) || endMs <= startMs) {
-        return { ok: false, reason: `override ${i + 1}: end must be a parseable ISO date AFTER start` }
-      }
-      const reason = typeof o.reason === "string" && o.reason.trim() ? o.reason.trim().slice(0, 200) : null
-      overrides.push({ userId, start, end, reason })
-    }
-  }
-
-  const isActive = body.isActive !== false
-
-  return { ok: true, name, rotation, overrides, isActive }
+function firstReason(err: z.ZodError): string {
+  const first = err.issues[0]
+  if (!first) return "invalid payload"
+  const path = first.path.length > 0 ? `${first.path.join(".")}: ` : ""
+  return `${path}${first.message}`
 }

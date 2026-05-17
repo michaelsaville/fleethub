@@ -1,32 +1,28 @@
 import "server-only"
-import { isValidWebhookUrl } from "@/lib/webhook-delivery"
+import { z } from "zod"
+import { ChannelList, normalizeMatch, type ChannelConfig } from "@/lib/schemas"
+import type { Severity } from "@/lib/schemas"
 
-// Phase 7 Workstream A step 3 — input validator for Fl_AlertRoute.
-// Shared by POST + PATCH so the create and edit paths apply
-// exactly the same rules.
+// Phase 8 Workstream C §5.3 — composed-from-schemas validator.
+// Same external API (validateRoutePayload + ValidRoutePayload +
+// ValidateResult) so the 2 admin routes that call this stay
+// unchanged. Atoms + match + channel union live under lib/schemas/.
 
-type SeverityToken = "critical" | "warn" | "info"
-const SEVERITY_VALUES: readonly SeverityToken[] = ["critical", "warn", "info"]
-
-interface NormalizedMatch {
-  severity?: SeverityToken[]
-  kindLike?: string
-}
+// ─── Backward-compat exports ─────────────────────────────────────
+// These types matched the pre-zod hand-written shapes. Re-exported
+// so any consumer outside the lib/ folder that imports them keeps
+// compiling. The new canonical types are zod-inferred under
+// lib/schemas/.
 
 export interface NormalizedChannel {
-  type: "slack" | "teams" | "email" | "sms" | "pagerduty" | "ticket"
+  type: ChannelConfig["type"]
   webhookUrl?: string
   toEmails?: string[]
   ccEmails?: string[]
-  /** E.164 phone numbers for sms channels. */
   phoneNumbers?: string[]
-  /** PagerDuty Events API v2 integration key. */
   integrationKey?: string
-  /** Phase 7 WS-A step 8 — email/sms channels can defer recipient
-   *  resolution to the current on-call user of this schedule. */
   oncallScheduleId?: string
 }
-
 export interface NormalizedEscalationStep {
   afterMin: number
   channels: NormalizedChannel[]
@@ -35,9 +31,8 @@ export interface NormalizedEscalationStep {
 export interface ValidRoutePayload {
   ok: true
   tenantName: string | null
-  match: NormalizedMatch
+  match: { severity?: Severity[]; kindLike?: string }
   channels: NormalizedChannel[]
-  /** Empty array when no escalation chain is configured. */
   escalation: NormalizedEscalationStep[]
   dedupWindowMin: number
   priority: number
@@ -48,179 +43,79 @@ export type ValidateResult =
   | ValidRoutePayload
   | { ok: false; reason: string }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const E164_RE = /^\+[1-9]\d{6,14}$/
+const EscalationStep = z.object({
+  afterMin: z.coerce
+    .number()
+    .int()
+    .min(1, "afterMin must be 1-1440")
+    .max(1440, "afterMin must be 1-1440"),
+  channels: ChannelList,
+})
+
+const RoutePayload = z.object({
+  // Empty string from the form means "all tenants" → null after normalize.
+  tenantName: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() ? v.trim() : null),
+    z.string().nullable(),
+  ),
+  match: z.any().optional(),
+  channels: ChannelList,
+  escalation: z.array(EscalationStep).max(10, "max 10 escalation steps").optional().default([]),
+  dedupWindowMin: z.coerce.number().int().min(0).max(1440).optional().default(15),
+  priority: z.coerce.number().int().min(0).max(1000).optional().default(100),
+  isActive: z.coerce.boolean().optional().default(true),
+})
 
 export function validateRoutePayload(body: Record<string, unknown>): ValidateResult {
-  // tenantName — empty string from the form means "all tenants" (null).
-  const tenantName =
-    typeof body.tenantName === "string" && body.tenantName.trim()
-      ? body.tenantName.trim()
-      : null
-
-  // match
-  const matchIn = (body.match ?? {}) as Record<string, unknown>
-  const severityIn = matchIn.severity
-  const severity: SeverityToken[] = []
-  if (Array.isArray(severityIn)) {
-    for (const s of severityIn) {
-      if (typeof s === "string" && (SEVERITY_VALUES as readonly string[]).includes(s)) {
-        severity.push(s as SeverityToken)
-      }
-    }
-  } else if (typeof severityIn === "string" && (SEVERITY_VALUES as readonly string[]).includes(severityIn)) {
-    severity.push(severityIn as SeverityToken)
+  const parsed = RoutePayload.safeParse(body)
+  if (!parsed.success) {
+    return { ok: false, reason: firstReason(parsed.error) }
   }
-  const kindLikeRaw = typeof matchIn.kindLike === "string" ? matchIn.kindLike.trim() : ""
-  if (kindLikeRaw.length > 200) {
-    return { ok: false, reason: "match.kindLike must be 200 characters or fewer" }
-  }
-  const match: NormalizedMatch = {}
-  if (severity.length > 0) match.severity = severity
-  if (kindLikeRaw) match.kindLike = kindLikeRaw
-
-  // channels — at least one required.
-  const primary = validateChannelList(body.channels, "primary")
-  if ("error" in primary) return { ok: false, reason: primary.error }
-  const channels = primary.channels
-
-  // escalation chain — optional
-  const escalation: NormalizedEscalationStep[] = []
-  if (Array.isArray(body.escalation)) {
-    if (body.escalation.length > 10) {
-      return { ok: false, reason: "max 10 escalation steps" }
-    }
-    for (let i = 0; i < body.escalation.length; i++) {
-      const s = body.escalation[i] as Record<string, unknown> | null
-      if (!s || typeof s !== "object") {
-        return { ok: false, reason: `escalation step ${i + 1}: not an object` }
-      }
-      const afterMin = clampInt(s.afterMin, 1, 1440, 0)
-      if (afterMin <= 0) {
-        return { ok: false, reason: `escalation step ${i + 1}: afterMin must be 1-1440` }
-      }
-      const stepChannels = validateChannelList(s.channels, `escalation step ${i + 1}`)
-      if ("error" in stepChannels) return { ok: false, reason: stepChannels.error }
-      escalation.push({ afterMin, channels: stepChannels.channels })
-    }
-  }
-
-  // numbers
-  const dedupWindowMin = clampInt(body.dedupWindowMin, 0, 1440, 15)
-  const priority = clampInt(body.priority, 0, 1000, 100)
-  const isActive = body.isActive !== false
-
   return {
     ok: true,
-    tenantName,
-    match,
-    channels,
-    escalation,
-    dedupWindowMin,
-    priority,
-    isActive,
+    tenantName: parsed.data.tenantName,
+    match: normalizeMatch(parsed.data.match),
+    channels: normalizeChannels(parsed.data.channels),
+    escalation: parsed.data.escalation.map((s) => ({
+      afterMin: s.afterMin,
+      channels: normalizeChannels(s.channels),
+    })),
+    dedupWindowMin: parsed.data.dedupWindowMin,
+    priority: parsed.data.priority,
+    isActive: parsed.data.isActive,
   }
 }
 
-function validateChannelList(
-  raw: unknown,
-  label: string,
-): { channels: NormalizedChannel[] } | { error: string } {
-  if (!Array.isArray(raw) || raw.length === 0) {
-    return { error: `${label}: at least one channel is required` }
-  }
-  if (raw.length > 10) {
-    return { error: `${label}: max 10 channels` }
-  }
-  const out: NormalizedChannel[] = []
-  for (let i = 0; i < raw.length; i++) {
-    const c = raw[i] as Record<string, unknown> | null
-    if (!c || typeof c !== "object") {
-      return { error: `${label} channel ${i + 1}: not an object` }
+function normalizeChannels(list: ChannelConfig[]): NormalizedChannel[] {
+  return list.map((c): NormalizedChannel => {
+    switch (c.type) {
+      case "slack":
+      case "teams":
+        return { type: c.type, webhookUrl: c.webhookUrl }
+      case "email": {
+        const ch: NormalizedChannel = { type: "email" }
+        if (c.toEmails && c.toEmails.length > 0) ch.toEmails = c.toEmails
+        if (c.ccEmails && c.ccEmails.length > 0) ch.ccEmails = c.ccEmails
+        if (c.oncallScheduleId) ch.oncallScheduleId = c.oncallScheduleId
+        return ch
+      }
+      case "sms": {
+        const ch: NormalizedChannel = { type: "sms" }
+        if (c.phoneNumbers && c.phoneNumbers.length > 0) ch.phoneNumbers = c.phoneNumbers
+        if (c.oncallScheduleId) ch.oncallScheduleId = c.oncallScheduleId
+        return ch
+      }
+      case "pagerduty":
+        return { type: "pagerduty", integrationKey: c.integrationKey }
+      case "ticket":
+        return { type: "ticket" }
     }
-    const type = c.type
-    if (type === "slack" || type === "teams") {
-      const url = typeof c.webhookUrl === "string" ? c.webhookUrl.trim() : ""
-      if (!url) return { error: `${label} ${type} channel: webhookUrl required` }
-      if (!isValidWebhookUrl(url, type)) {
-        return { error: `${label} ${type} channel: webhookUrl does not look like a ${type} incoming webhook` }
-      }
-      out.push({ type, webhookUrl: url })
-      continue
-    }
-    if (type === "email") {
-      const oncallId = typeof c.oncallScheduleId === "string" ? c.oncallScheduleId.trim() : ""
-      const toIn = Array.isArray(c.toEmails) ? c.toEmails : []
-      const to: string[] = []
-      for (const x of toIn) {
-        if (typeof x === "string" && EMAIL_RE.test(x.trim())) to.push(x.trim())
-      }
-      if (!oncallId && to.length === 0) {
-        return { error: `${label} email channel: at least one valid toEmail required (or an oncallScheduleId)` }
-      }
-      const ccIn = Array.isArray(c.ccEmails) ? c.ccEmails : []
-      const cc: string[] = []
-      for (const x of ccIn) {
-        if (typeof x === "string" && EMAIL_RE.test(x.trim())) cc.push(x.trim())
-      }
-      const channel: NormalizedChannel = { type: "email" }
-      if (to.length > 0) channel.toEmails = to
-      if (cc.length > 0) channel.ccEmails = cc
-      if (oncallId) channel.oncallScheduleId = oncallId
-      out.push(channel)
-      continue
-    }
-    if (type === "sms") {
-      const oncallId = typeof c.oncallScheduleId === "string" ? c.oncallScheduleId.trim() : ""
-      const numbersIn = Array.isArray(c.phoneNumbers) ? c.phoneNumbers : []
-      const phoneNumbers: string[] = []
-      for (const x of numbersIn) {
-        if (typeof x !== "string") continue
-        const trimmed = x.trim()
-        if (!E164_RE.test(trimmed)) {
-          return { error: `${label} sms channel: "${trimmed}" is not E.164 format (e.g. +14155551234)` }
-        }
-        phoneNumbers.push(trimmed)
-      }
-      if (!oncallId && phoneNumbers.length === 0) {
-        return { error: `${label} sms channel: at least one E.164 phone number required (or an oncallScheduleId)` }
-      }
-      if (phoneNumbers.length > 20) {
-        return { error: `${label} sms channel: max 20 phone numbers per channel` }
-      }
-      const channel: NormalizedChannel = { type: "sms" }
-      if (phoneNumbers.length > 0) channel.phoneNumbers = phoneNumbers
-      if (oncallId) channel.oncallScheduleId = oncallId
-      out.push(channel)
-      continue
-    }
-    if (type === "pagerduty") {
-      const key = typeof c.integrationKey === "string" ? c.integrationKey.trim() : ""
-      if (!key) {
-        return { error: `${label} pagerduty channel: integrationKey required` }
-      }
-      // PD integration keys are 32 hex chars. Be lenient on format
-      // but enforce a sane length so a typo'd partial key doesn't
-      // sail through.
-      if (key.length < 20 || key.length > 80) {
-        return { error: `${label} pagerduty channel: integrationKey looks malformed (length ${key.length})` }
-      }
-      out.push({ type: "pagerduty", integrationKey: key })
-      continue
-    }
-    if (type === "ticket") {
-      // No per-channel config in v1 — TH derives priority + board
-      // from severity + kind on the receiving side.
-      out.push({ type: "ticket" })
-      continue
-    }
-    return { error: `${label} channel ${i + 1}: type "${String(type)}" not supported (slack | teams | email | sms | pagerduty | ticket)` }
-  }
-  return { channels: out }
+  })
 }
 
-function clampInt(v: unknown, lo: number, hi: number, fallback: number): number {
-  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN
-  if (!Number.isFinite(n)) return fallback
-  return Math.max(lo, Math.min(hi, Math.floor(n)))
+function firstReason(err: z.ZodError): string {
+  const first = err.issues[0]
+  if (!first) return "invalid payload"
+  const path = first.path.length > 0 ? `${first.path.join(".")}: ` : ""
+  return `${path}${first.message}`
 }
