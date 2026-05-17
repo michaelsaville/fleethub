@@ -120,6 +120,26 @@ model Fl_Device {
   /// FleetHub-side cache so the device page doesn't round-trip on
   /// every load. Null until populated.
   rustdeskId    String?
+  /// Phase 8 Workstream B — backup / AV / encryption / warranty
+  /// posture. All nullable; only populated when the agent reports
+  /// them. Point-in-time snapshot on each heartbeat — no separate
+  /// sample table (the compliance score is computed from the last
+  /// reported state, not a time series).
+  backupLastSuccess  DateTime?
+  backupLastError    DateTime?
+  backupLastErrorMsg String?
+  /// "veeam" | "datto" | "restic" | "windows-backup" | "none"
+  backupProduct      String?
+  /// "defender" | "crowdstrike" | "sophos" | "sentinelone" | "none"
+  avEngine           String?
+  avEnabled          Boolean?
+  avSignaturesAt     DateTime?
+  bitlockerOn        Boolean?
+  warrantyExpiresAt  DateTime?
+  /// Heartbeat timestamp from the most recent posture.* call.
+  /// Lets the UI surface "posture stale" when this lags lastSeenAt
+  /// significantly.
+  postureReportedAt  DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
