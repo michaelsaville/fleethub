@@ -80,6 +80,32 @@ export default async function DeviceDetailPage({
     console.warn("[devices/[id]] TicketHub linked-tickets unavailable:", (err as Error).message)
   }
 
+  // Phase 8 Workstream B step 4 — posture snapshot. Columns not in
+  // the generated Prisma client yet (added via raw DDL in step 1);
+  // pull via $queryRaw. All nullable — only populated once the
+  // agent's posture.* detectors land.
+  type PostureRow = {
+    backupLastSuccess: Date | null
+    backupLastError: Date | null
+    backupLastErrorMsg: string | null
+    backupProduct: string | null
+    avEngine: string | null
+    avEnabled: boolean | null
+    avSignaturesAt: Date | null
+    bitlockerOn: boolean | null
+    warrantyExpiresAt: Date | null
+    postureReportedAt: Date | null
+  }
+  const postureRows = await prisma.$queryRaw<PostureRow[]>`
+    SELECT "backupLastSuccess", "backupLastError", "backupLastErrorMsg",
+           "backupProduct", "avEngine", "avEnabled", "avSignaturesAt",
+           "bitlockerOn", "warrantyExpiresAt", "postureReportedAt"
+    FROM fleethub.fl_devices
+    WHERE id = ${id}
+    LIMIT 1
+  `
+  const posture = postureRows[0] ?? null
+
   const [alerts, activity, scriptRuns, fleet, maint, ctx, deviceMeta, remoteSessions] = await Promise.all([
     getDeviceAlerts(id),
     getDeviceActivity(id, 30),
@@ -142,7 +168,7 @@ export default async function DeviceDetailPage({
           }}
         />
         <TabNav active={tab} deviceId={device.id} />
-        {tab === "summary"  && <SummaryTab device={device} alerts={alerts} linkedTickets={linkedTickets} ticketHubPublicUrl={ticketHubPublicUrl} />}
+        {tab === "summary"  && <SummaryTab device={device} alerts={alerts} linkedTickets={linkedTickets} ticketHubPublicUrl={ticketHubPublicUrl} posture={posture} />}
         {tab === "system"   && <SystemTab device={device} />}
         {tab === "alerts"   && <AlertsTab alerts={alerts} />}
         {tab === "activity" && <ActivityFeed items={activity} title="Device activity" />}
@@ -362,16 +388,31 @@ type LinkedTicket = {
   client_name: string
 }
 
+type PostureSnapshot = {
+  backupLastSuccess: Date | null
+  backupLastError: Date | null
+  backupLastErrorMsg: string | null
+  backupProduct: string | null
+  avEngine: string | null
+  avEnabled: boolean | null
+  avSignaturesAt: Date | null
+  bitlockerOn: boolean | null
+  warrantyExpiresAt: Date | null
+  postureReportedAt: Date | null
+} | null
+
 function SummaryTab({
   device,
   alerts,
   linkedTickets,
   ticketHubPublicUrl,
+  posture,
 }: {
   device: DeviceRow
   alerts: DeviceAlert[]
   linkedTickets: LinkedTicket[]
   ticketHubPublicUrl: string
+  posture: PostureSnapshot
 }) {
   const inv = device.inventory
   const openAlerts = alerts.filter((a) => a.state === "open").slice(0, 3)
@@ -446,6 +487,9 @@ function SummaryTab({
               ["Timezone",   inv.os.timezone],
             ]} />
           ) : <Empty>No OS data.</Empty>}
+        </Card>
+        <Card title={`Posture${posture?.postureReportedAt ? ` · reported ${relativeLastSeen(posture.postureReportedAt)}` : ""}`}>
+          <PostureBody posture={posture} />
         </Card>
         <Card title={`TicketHub tickets${openTickets.length ? ` · ${openTickets.length} open` : ""}`}>
           {linkedTickets.length === 0 ? (
@@ -1025,6 +1069,154 @@ function Empty({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ fontSize: "12.5px", color: "var(--color-text-muted)", lineHeight: 1.55 }}>{children}</div>
   )
+}
+
+// Phase 8 Workstream B step 4 — posture card body. Pure render of
+// the four posture areas (backup / AV / encryption / warranty)
+// with status chips so the tech sees risk at a glance. Stale
+// posture (postureReportedAt < lastSeenAt - 24h) renders a banner
+// so an outdated agent doesn't silently look "ok".
+function PostureBody({ posture }: { posture: PostureSnapshot }) {
+  if (!posture || !posture.postureReportedAt) {
+    return <Empty>Agent hasn&rsquo;t reported posture yet (posture.* methods land with the WS-B agent rollout).</Empty>
+  }
+
+  const now = Date.now()
+  const backupTone = backupTone_(posture.backupLastSuccess, posture.backupProduct, now)
+  const avTone = avTone_(posture.avEnabled, posture.avEngine, posture.avSignaturesAt, now)
+  const bitlockerTone = bitlockerTone_(posture.bitlockerOn)
+  const warrantyTone = warrantyTone_(posture.warrantyExpiresAt, now)
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "8px", fontSize: "12.5px" }}>
+      <PostureRow
+        label="Backup"
+        tone={backupTone}
+        primary={
+          posture.backupProduct
+            ? `${posture.backupProduct}${posture.backupLastSuccess ? ` · last success ${relativeLastSeen(posture.backupLastSuccess)}` : " · no success yet"}`
+            : "not detected"
+        }
+        secondary={
+          posture.backupLastError && posture.backupLastErrorMsg
+            ? `error ${relativeLastSeen(posture.backupLastError)}: ${truncate_(posture.backupLastErrorMsg, 80)}`
+            : null
+        }
+      />
+      <PostureRow
+        label="AV / EDR"
+        tone={avTone}
+        primary={
+          posture.avEngine
+            ? `${posture.avEngine}${posture.avEnabled === false ? " · disabled" : posture.avEnabled === true ? " · enabled" : ""}`
+            : "not detected"
+        }
+        secondary={
+          posture.avSignaturesAt
+            ? `signatures ${relativeLastSeen(posture.avSignaturesAt)}`
+            : null
+        }
+      />
+      <PostureRow
+        label="Encryption"
+        tone={bitlockerTone}
+        primary={
+          posture.bitlockerOn === true ? "BitLocker on"
+            : posture.bitlockerOn === false ? "BitLocker off"
+              : "not reported"
+        }
+      />
+      <PostureRow
+        label="Warranty"
+        tone={warrantyTone}
+        primary={
+          posture.warrantyExpiresAt
+            ? `expires ${posture.warrantyExpiresAt.toISOString().slice(0, 10)}`
+            : "not reported"
+        }
+      />
+    </div>
+  )
+}
+
+function PostureRow({
+  label,
+  tone,
+  primary,
+  secondary,
+}: {
+  label: string
+  tone: "ok" | "warn" | "bad" | "neutral"
+  primary: string
+  secondary?: string | null
+}) {
+  const palette: Record<typeof tone, { bg: string; fg: string }> = {
+    ok:      { bg: "rgba(16, 185, 129, 0.15)", fg: "var(--color-success, #059669)" },
+    warn:    { bg: "rgba(245, 158, 11, 0.15)", fg: "var(--color-warn, #d97706)" },
+    bad:     { bg: "rgba(220, 38, 38, 0.15)",  fg: "var(--color-danger, #b91c1c)" },
+    neutral: { bg: "rgba(148, 163, 184, 0.15)", fg: "var(--color-text-muted)" },
+  }
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
+      <span style={{ width: 90, color: "var(--color-text-muted)", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
+        {label}
+      </span>
+      <span style={{
+        display: "inline-block",
+        padding: "1px 8px",
+        borderRadius: "999px",
+        fontSize: "10.5px",
+        fontWeight: 600,
+        background: palette[tone].bg,
+        color: palette[tone].fg,
+      }}>
+        {tone}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ color: "var(--color-text-primary)" }}>{primary}</div>
+        {secondary && (
+          <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginTop: "2px" }}>
+            {secondary}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function backupTone_(lastSuccess: Date | null, product: string | null, now: number): "ok" | "warn" | "bad" | "neutral" {
+  if (!product || product === "none") return "neutral"
+  if (!lastSuccess) return "bad"
+  const ageH = (now - lastSuccess.getTime()) / 3_600_000
+  if (ageH > 72) return "bad"
+  if (ageH > 36) return "warn"
+  return "ok"
+}
+function avTone_(enabled: boolean | null, engine: string | null, signaturesAt: Date | null, now: number): "ok" | "warn" | "bad" | "neutral" {
+  if (!engine || engine === "none") return "bad"
+  if (enabled === false) return "bad"
+  if (enabled !== true) return "neutral"
+  if (signaturesAt) {
+    const ageD = (now - signaturesAt.getTime()) / 86_400_000
+    if (ageD > 7) return "warn"
+  }
+  return "ok"
+}
+function bitlockerTone_(on: boolean | null): "ok" | "warn" | "bad" | "neutral" {
+  if (on === null) return "neutral"
+  if (on === true) return "ok"
+  return "warn"
+}
+function warrantyTone_(expiresAt: Date | null, now: number): "ok" | "warn" | "bad" | "neutral" {
+  if (!expiresAt) return "neutral"
+  const daysLeft = (expiresAt.getTime() - now) / 86_400_000
+  if (daysLeft < 0) return "bad"
+  if (daysLeft < 60) return "warn"
+  return "ok"
+}
+function truncate_(s: string, max: number): string {
+  if (s.length <= max) return s
+  return s.slice(0, max - 1) + "…"
 }
 
 const thHeadRow: React.CSSProperties = {
