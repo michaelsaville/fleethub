@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
+import { ConfirmModal } from "@/components/ui/ConfirmModal"
 
 interface MissingHost {
   installId: string
@@ -28,6 +29,7 @@ export default function PatchDeployForm({
   )
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [realDeployConfirmOpen, setRealDeployConfirmOpen] = useState(false)
 
   function toggle(id: string) {
     const next = new Set(selectedIds)
@@ -42,17 +44,19 @@ export default function PatchDeployForm({
     setSelectedIds(new Set())
   }
 
-  async function submit() {
+  function onSubmitClick() {
     if (selectedIds.size === 0) {
       setError("Pick at least one host.")
       return
     }
     if (!dryRun) {
-      const ok = window.confirm(
-        `This is a REAL deploy (not dry-run) to ${selectedIds.size} host(s). Continue?`,
-      )
-      if (!ok) return
+      setRealDeployConfirmOpen(true)
+      return
     }
+    void runDeploy()
+  }
+
+  async function runDeploy() {
     setSubmitting(true)
     setError(null)
     try {
@@ -68,9 +72,8 @@ export default function PatchDeployForm({
       const json = await res.json()
       if (!res.ok) {
         setError(json.error || "Deploy failed")
-        return
+        throw new Error(json.error || "Deploy failed")
       }
-      // Refresh the page so the install rows update.
       setOpen(false)
       router.refresh()
     } finally {
@@ -219,7 +222,7 @@ export default function PatchDeployForm({
 
       <div style={{ display: "flex", gap: 8 }}>
         <button
-          onClick={submit}
+          onClick={onSubmitClick}
           disabled={submitting || selectedIds.size === 0}
           style={{
             fontSize: 12,
@@ -251,6 +254,15 @@ export default function PatchDeployForm({
           Cancel
         </button>
       </div>
+      <ConfirmModal
+        open={realDeployConfirmOpen}
+        onClose={() => setRealDeployConfirmOpen(false)}
+        onConfirm={runDeploy}
+        title="Run a real (non-dry) patch deploy?"
+        body={`This will dispatch the patch to ${selectedIds.size} host${selectedIds.size === 1 ? "" : "s"} for real. Reboot policy: ${rebootPolicy}.`}
+        confirmLabel="Dispatch real deploy"
+        tone="danger"
+      />
     </div>
   )
 }

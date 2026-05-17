@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { FIELD_SM, TYPOGRAPHY, CARD } from "@/lib/ui-tokens"
 import { Button } from "@/components/ui/Button"
+import { ConfirmModal } from "@/components/ui/ConfirmModal"
 
 // Phase 7 Workstream A step 8 — shared editor for on-call schedules.
 // Rotation grid: pick a user + days + start/end (UTC HH:MM).
@@ -57,6 +58,7 @@ export default function OncallScheduleForm({
   const [isActive, setIsActive] = useState(initial.isActive)
   const [submitting, setSubmitting] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const isEdit = initial.id !== null
 
@@ -128,7 +130,6 @@ export default function OncallScheduleForm({
 
   async function onDelete() {
     if (!isEdit) return
-    if (!confirm("Delete this schedule? Any alert-route channel that references it will start failing dispatch.")) return
     setDeleting(true)
     try {
       const res = await fetch(`/api/admin/oncall-schedules/${initial.id}`, { method: "DELETE" })
@@ -136,13 +137,13 @@ export default function OncallScheduleForm({
         const j = (await res.json().catch(() => ({}))) as { error?: string }
         setError(j.error ?? `Delete failed (HTTP ${res.status})`)
         setDeleting(false)
-        return
+        throw new Error(j.error ?? `Delete failed (HTTP ${res.status})`)
       }
       router.push("/setup/oncall-schedules")
       router.refresh()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Network error")
       setDeleting(false)
+      throw err
     }
   }
 
@@ -229,13 +230,26 @@ export default function OncallScheduleForm({
           <Button
             type="button"
             variant="danger"
-            onClick={onDelete}
+            onClick={() => setDeleteConfirmOpen(true)}
             disabled={deleting || submitting}
             style={{ marginRight: "auto", background: "transparent", color: "var(--color-danger)", border: "0.5px solid var(--color-danger)" }}
           >
             {deleting ? "Deleting…" : "Delete schedule"}
           </Button>
         )}
+        <ConfirmModal
+          open={deleteConfirmOpen}
+          onClose={() => setDeleteConfirmOpen(false)}
+          onConfirm={onDelete}
+          title="Delete this schedule?"
+          body="Any alert-route channel that references it will start failing dispatch. Historical dispatches stay in the audit log."
+          confirmLabel="Delete schedule"
+          tone="danger"
+          typedName={{
+            expected: name,
+            prompt: `Type "${name}" to confirm:`,
+          }}
+        />
         <Link
           href="/setup/oncall-schedules"
           style={{ padding: "8px 14px", fontSize: 13, color: "var(--color-text-secondary)", textDecoration: "none", borderRadius: "var(--radius-sm)" }}

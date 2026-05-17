@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
+import { ConfirmModal } from "@/components/ui/ConfirmModal"
 
 export default function PackageActions({
   packageId,
@@ -15,6 +16,7 @@ export default function PackageActions({
   const router = useRouter()
   const [busy, setBusy] = useState<string | null>(null)
   const [, startTransition] = useTransition()
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false)
 
   async function action(path: string) {
     setBusy(path)
@@ -40,14 +42,21 @@ export default function PackageActions({
         </button>
       )}
       <button
-        onClick={() => {
-          if (confirm("Archive this package? Existing deployments unaffected.")) action("archive")
-        }}
+        onClick={() => setArchiveConfirmOpen(true)}
         disabled={busy !== null}
         style={{ ...btn(), color: "var(--color-danger)" }}
       >
         {busy === "archive" ? "…" : "Archive"}
       </button>
+      <ConfirmModal
+        open={archiveConfirmOpen}
+        onClose={() => setArchiveConfirmOpen(false)}
+        onConfirm={() => action("archive")}
+        title="Archive this package?"
+        body="Existing deployments are unaffected. The package will no longer appear in pickers."
+        confirmLabel="Archive"
+        tone="danger"
+      />
     </div>
   )
 }

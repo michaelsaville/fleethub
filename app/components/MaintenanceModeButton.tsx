@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
+import { ConfirmModal } from "@/components/ui/ConfirmModal"
 
 export default function MaintenanceModeButton({
   deviceId,
@@ -21,6 +22,7 @@ export default function MaintenanceModeButton({
   const [, startTransition] = useTransition()
   const [draftUntil, setDraftUntil] = useState("")
   const [draftReason, setDraftReason] = useState(reason ?? "")
+  const [releaseConfirmOpen, setReleaseConfirmOpen] = useState(false)
 
   async function call(on: boolean, untilStr?: string, reasonStr?: string) {
     setBusy(true)
@@ -51,28 +53,35 @@ export default function MaintenanceModeButton({
 
   if (isOn) {
     return (
-      <button
-        type="button"
-        onClick={() => {
-          if (confirm("Take this host out of Maintenance Mode? Deploys + alerts resume.")) {
-            call(false)
-          }
-        }}
-        disabled={busy}
-        title={`In maintenance${until ? ` until ${new Date(until).toLocaleString()}` : ""}${reason ? `: ${reason}` : ""}`}
-        style={{
-          padding: "6px 12px",
-          fontSize: 12,
-          fontWeight: 600,
-          borderRadius: 6,
-          border: "0.5px solid var(--color-warn)",
-          background: "var(--color-warn)",
-          color: "#fff",
-          cursor: "pointer",
-        }}
-      >
-        🔒 Maintenance · click to release
-      </button>
+      <>
+        <button
+          type="button"
+          onClick={() => setReleaseConfirmOpen(true)}
+          disabled={busy}
+          title={`In maintenance${until ? ` until ${new Date(until).toLocaleString()}` : ""}${reason ? `: ${reason}` : ""}`}
+          style={{
+            padding: "6px 12px",
+            fontSize: 12,
+            fontWeight: 600,
+            borderRadius: 6,
+            border: "0.5px solid var(--color-warn)",
+            background: "var(--color-warn)",
+            color: "#fff",
+            cursor: "pointer",
+          }}
+        >
+          🔒 Maintenance · click to release
+        </button>
+        <ConfirmModal
+          open={releaseConfirmOpen}
+          onClose={() => setReleaseConfirmOpen(false)}
+          onConfirm={() => call(false)}
+          title="Release maintenance mode?"
+          body="Deploys and alerts will resume immediately."
+          confirmLabel="Release maintenance"
+          tone="primary"
+        />
+      </>
     )
   }
 

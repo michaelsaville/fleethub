@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
+import { ConfirmModal } from "@/components/ui/ConfirmModal"
 
 interface SeedResult {
   ok: boolean
@@ -14,10 +15,10 @@ export default function SeedPatchesButton() {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<SeedResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [seedConfirmOpen, setSeedConfirmOpen] = useState(false)
   const [, startTransition] = useTransition()
 
   async function seed() {
-    if (!confirm("Seed mock patch catalog + ingest CISA KEV (~1200 CVEs)?\nThis hits the public CISA endpoint and writes ~24 patches + per-host mock install state.")) return
     setBusy(true)
     setError(null)
     setResult(null)
@@ -32,6 +33,7 @@ export default function SeedPatchesButton() {
       startTransition(() => router.refresh())
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+      throw err
     } finally {
       setBusy(false)
     }
@@ -40,7 +42,7 @@ export default function SeedPatchesButton() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
       <button
-        onClick={seed}
+        onClick={() => setSeedConfirmOpen(true)}
         disabled={busy}
         style={{
           fontSize: 12,
@@ -61,6 +63,14 @@ export default function SeedPatchesButton() {
           ✓ {result.seed.patchesUpserted} patches · {result.cveIngest.newAdvisories} new CVEs · {result.cveIngest.updatedAdvisories} updated
         </span>
       )}
+      <ConfirmModal
+        open={seedConfirmOpen}
+        onClose={() => setSeedConfirmOpen(false)}
+        onConfirm={seed}
+        title="Seed mock patch catalog + ingest CISA KEV?"
+        body="This hits the public CISA endpoint and writes ~24 patches + per-host mock install state. ~1200 CVEs are ingested."
+        confirmLabel="Seed catalog"
+      />
     </div>
   )
 }

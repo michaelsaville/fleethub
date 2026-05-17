@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
+import { ConfirmModal } from "@/components/ui/ConfirmModal"
 
 interface ScheduleRow {
   id: string
@@ -63,6 +64,7 @@ export default function ScheduledReportsClient({
   const [teamsWebhookUrl, setTeamsWebhookUrl] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<ScheduleRow | null>(null)
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -93,13 +95,12 @@ export default function ScheduledReportsClient({
     }
   }
 
-  async function deleteSchedule(id: string) {
-    if (!confirm("Delete this schedule? It will stop firing immediately.")) return
-    const res = await fetch(`/api/report-schedules/${id}`, { method: "DELETE" })
+  async function confirmDelete() {
+    if (!pendingDelete) return
+    const res = await fetch(`/api/report-schedules/${pendingDelete.id}`, { method: "DELETE" })
     if (!res.ok) {
       const j = await res.json().catch(() => ({}))
-      alert(j.error || "Failed to delete")
-      return
+      throw new Error(j.error || "Failed to delete")
     }
     router.refresh()
   }
@@ -314,7 +315,7 @@ export default function ScheduledReportsClient({
                       <button onClick={() => toggleActive(s.id, s.isActive)} style={smallBtn}>
                         {s.isActive ? "Pause" : "Resume"}
                       </button>
-                      <button onClick={() => deleteSchedule(s.id)} style={{ ...smallBtn, color: "var(--color-danger)", marginLeft: 4 }}>
+                      <button onClick={() => setPendingDelete(s)} style={{ ...smallBtn, color: "var(--color-danger)", marginLeft: 4 }}>
                         Delete
                       </button>
                     </td>
@@ -325,6 +326,19 @@ export default function ScheduledReportsClient({
           </table>
         )}
       </div>
+      <ConfirmModal
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        onConfirm={confirmDelete}
+        title="Delete this schedule?"
+        body={
+          pendingDelete
+            ? `It will stop firing immediately. (${pendingDelete.tenantName} · ${pendingDelete.kind})`
+            : "It will stop firing immediately."
+        }
+        confirmLabel="Delete schedule"
+        tone="danger"
+      />
     </div>
   )
 }

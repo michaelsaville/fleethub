@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
+import { ConfirmModal } from "@/components/ui/ConfirmModal"
 
 export default function DeploymentControls({
   deploymentId,
@@ -17,6 +18,7 @@ export default function DeploymentControls({
   const router = useRouter()
   const [busy, setBusy] = useState<string | null>(null)
   const [, startTransition] = useTransition()
+  const [abortConfirmOpen, setAbortConfirmOpen] = useState(false)
 
   async function call(path: string, body?: unknown) {
     setBusy(path)
@@ -77,16 +79,21 @@ export default function DeploymentControls({
         </button>
       )}
       <button
-        onClick={() => {
-          if (confirm("Abort this deployment? Pending targets will be skipped.")) {
-            call(`/api/deployments/${deploymentId}/abort`)
-          }
-        }}
+        onClick={() => setAbortConfirmOpen(true)}
         disabled={busy !== null}
         style={btnDanger()}
       >
         {busy?.endsWith("/abort") ? "…" : "✋ Abort"}
       </button>
+      <ConfirmModal
+        open={abortConfirmOpen}
+        onClose={() => setAbortConfirmOpen(false)}
+        onConfirm={() => call(`/api/deployments/${deploymentId}/abort`)}
+        title="Abort this deployment?"
+        body="Pending targets will be skipped. Already-completed targets are unaffected."
+        confirmLabel="Abort deployment"
+        tone="danger"
+      />
     </div>
   )
 }

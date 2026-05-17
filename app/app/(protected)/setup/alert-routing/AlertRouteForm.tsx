@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { FIELD, TYPOGRAPHY, CARD } from "@/lib/ui-tokens"
 import { Button } from "@/components/ui/Button"
+import { ConfirmModal } from "@/components/ui/ConfirmModal"
 
 // Phase 7 Workstream A step 3 — shared editor for create + edit.
 // No client-side state machine beyond local form state; all
@@ -71,6 +72,7 @@ export default function AlertRouteForm({
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
 
   const isEdit = initial.id !== null
 
@@ -197,7 +199,6 @@ export default function AlertRouteForm({
 
   async function onDelete() {
     if (!isEdit) return
-    if (!confirm(`Delete this route? Historical dispatches stay in the audit log, but this rule will no longer evaluate.`)) return
     setDeleting(true)
     try {
       const res = await fetch(`/api/admin/alert-routes/${initial.id}`, { method: "DELETE" })
@@ -205,13 +206,13 @@ export default function AlertRouteForm({
         const j = (await res.json().catch(() => ({}))) as { error?: string }
         setError(j.error ?? `Delete failed (HTTP ${res.status})`)
         setDeleting(false)
-        return
+        throw new Error(j.error ?? `Delete failed (HTTP ${res.status})`)
       }
       router.push("/setup/alert-routing")
       router.refresh()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Network error")
       setDeleting(false)
+      throw err
     }
   }
 
@@ -358,13 +359,32 @@ export default function AlertRouteForm({
           <Button
             type="button"
             variant="danger"
-            onClick={onDelete}
+            onClick={() => setDeleteConfirmOpen(true)}
             disabled={deleting || submitting}
             style={{ marginRight: "auto", background: "transparent", color: "var(--color-danger)", border: "0.5px solid var(--color-danger)" }}
           >
             {deleting ? "Deleting…" : "Delete route"}
           </Button>
         )}
+        <ConfirmModal
+          open={deleteConfirmOpen}
+          onClose={() => setDeleteConfirmOpen(false)}
+          onConfirm={onDelete}
+          title="Delete this route?"
+          body={
+            tenantName
+              ? `Historical dispatches stay in the audit log, but this rule will no longer evaluate. Type the tenant name to confirm.`
+              : `Historical dispatches stay in the audit log, but this rule will no longer evaluate. Type GLOBAL to confirm.`
+          }
+          confirmLabel="Delete route"
+          tone="danger"
+          typedName={{
+            expected: tenantName || "GLOBAL",
+            prompt: tenantName
+              ? `Type "${tenantName}" to confirm:`
+              : `Type "GLOBAL" to confirm:`,
+          }}
+        />
         <Link
           href="/setup/alert-routing"
           style={{ padding: "8px 14px", fontSize: 13, color: "var(--color-text-secondary)", textDecoration: "none", borderRadius: "var(--radius-sm)" }}

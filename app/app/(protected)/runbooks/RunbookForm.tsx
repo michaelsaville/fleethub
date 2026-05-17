@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { FIELD, TYPOGRAPHY, CARD } from "@/lib/ui-tokens"
 import { Button } from "@/components/ui/Button"
+import { ConfirmModal } from "@/components/ui/ConfirmModal"
 
 // Phase 7 Workstream B step 3 — shared wizard for create + edit.
 // One form, four sections (Identity → Match → Script → Behavior)
@@ -60,6 +61,7 @@ export default function RunbookForm({
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
 
   function toggleSeverity(s: Severity) {
     setSeverity((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]))
@@ -110,7 +112,6 @@ export default function RunbookForm({
 
   async function onDelete() {
     if (!isEdit) return
-    if (!confirm("Delete this runbook? Fire history is cascade-deleted with it. Use Disable if you want to keep the history.")) return
     setDeleting(true)
     try {
       const res = await fetch(`/api/admin/runbooks/${initial.id}`, { method: "DELETE" })
@@ -118,13 +119,13 @@ export default function RunbookForm({
         const j = (await res.json().catch(() => ({}))) as { error?: string }
         setError(j.error ?? `Delete failed (HTTP ${res.status})`)
         setDeleting(false)
-        return
+        throw new Error(j.error ?? `Delete failed (HTTP ${res.status})`)
       }
       router.push("/runbooks")
       router.refresh()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Network error")
       setDeleting(false)
+      throw err
     }
   }
 
@@ -220,13 +221,26 @@ export default function RunbookForm({
           <Button
             type="button"
             variant="danger"
-            onClick={onDelete}
+            onClick={() => setDeleteConfirmOpen(true)}
             disabled={deleting || submitting}
             style={{ marginRight: "auto", background: "transparent", color: "var(--color-danger)", border: "0.5px solid var(--color-danger)" }}
           >
             {deleting ? "Deleting…" : "Delete runbook"}
           </Button>
         )}
+        <ConfirmModal
+          open={deleteConfirmOpen}
+          onClose={() => setDeleteConfirmOpen(false)}
+          onConfirm={onDelete}
+          title="Delete this runbook?"
+          body="Fire history is cascade-deleted with it. Use Disable instead if you want to keep the history."
+          confirmLabel="Delete runbook"
+          tone="danger"
+          typedName={{
+            expected: name,
+            prompt: `Type "${name}" to confirm:`,
+          }}
+        />
         <Link
           href={isEdit ? `/runbooks/${initial.id}` : "/runbooks"}
           style={{ padding: "8px 14px", fontSize: 13, color: "var(--color-text-secondary)", textDecoration: "none", borderRadius: "var(--radius-sm)" }}

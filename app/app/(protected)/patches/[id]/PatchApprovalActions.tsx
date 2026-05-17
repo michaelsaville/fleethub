@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
+import { ConfirmModal } from "@/components/ui/ConfirmModal"
 
 interface Props {
   patchId: string
@@ -22,6 +23,7 @@ export default function PatchApprovalActions({ patchId, currentState, isAdmin }:
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [, startTransition] = useTransition()
+  const [declineConfirmOpen, setDeclineConfirmOpen] = useState(false)
 
   if (!isAdmin) {
     return (
@@ -31,8 +33,7 @@ export default function PatchApprovalActions({ patchId, currentState, isAdmin }:
     )
   }
 
-  async function set(state: "approved" | "declined" | "deferred", confirmMsg?: string) {
-    if (confirmMsg && !confirm(confirmMsg)) return
+  async function set(state: "approved" | "declined" | "deferred") {
     let notes: string | undefined
     if (state === "declined") {
       const entered = prompt("Reason for decline (optional but recommended):", "")
@@ -54,6 +55,7 @@ export default function PatchApprovalActions({ patchId, currentState, isAdmin }:
       startTransition(() => router.refresh())
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+      throw err
     } finally {
       setBusy(null)
     }
@@ -81,7 +83,7 @@ export default function PatchApprovalActions({ patchId, currentState, isAdmin }:
       )}
       {currentState !== "declined" && (
         <button
-          onClick={() => set("declined", "Decline this patch? Operators will not be able to launch deploys against it.")}
+          onClick={() => setDeclineConfirmOpen(true)}
           disabled={busy !== null}
           style={btn("var(--color-danger)")}
         >
@@ -89,6 +91,15 @@ export default function PatchApprovalActions({ patchId, currentState, isAdmin }:
         </button>
       )}
       {error && <span style={{ ...muted, color: "var(--color-danger)" }}>{error}</span>}
+      <ConfirmModal
+        open={declineConfirmOpen}
+        onClose={() => setDeclineConfirmOpen(false)}
+        onConfirm={() => set("declined")}
+        title="Decline this patch?"
+        body="Operators will not be able to launch deploys against it until it's re-approved. You'll be prompted for an optional decline reason after confirming."
+        confirmLabel="Decline patch"
+        tone="danger"
+      />
     </div>
   )
 }

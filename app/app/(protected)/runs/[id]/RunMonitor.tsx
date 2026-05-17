@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
+import { ConfirmModal } from "@/components/ui/ConfirmModal"
 
 export default function RunMonitor({
   runId,
@@ -43,6 +44,7 @@ export default function RunMonitor({
   const [follow, setFollow] = useState(true)
   const [autoRefresh, setAutoRefresh] = useState(isLive)
   const [busy, setBusy] = useState<string | null>(null)
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false)
 
   // Auto-refresh while live + autoRefresh on.
   useEffect(() => {
@@ -113,14 +115,21 @@ export default function RunMonitor({
                 auto-refresh
               </label>
               <button
-                onClick={() => {
-                  if (confirm("Cancel this run?")) call(`/api/script-runs/${runId}/cancel`)
-                }}
+                onClick={() => setCancelConfirmOpen(true)}
                 disabled={busy !== null}
                 style={btnDanger()}
               >
                 {busy?.endsWith("/cancel") ? "…" : "Cancel run"}
               </button>
+              <ConfirmModal
+                open={cancelConfirmOpen}
+                onClose={() => setCancelConfirmOpen(false)}
+                onConfirm={() => call(`/api/script-runs/${runId}/cancel`)}
+                title="Cancel this run?"
+                body="The agent will be signalled to stop. Output already captured is retained."
+                confirmLabel="Cancel run"
+                tone="danger"
+              />
             </>
           )}
           <label style={{ fontSize: 11, color: "var(--color-text-muted)", display: "flex", alignItems: "center", gap: 6 }}>
