@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { verifyHmac } from "@/lib/bff-hmac"
+import {
+  computePostureScore,
+  isBackupStale,
+  isAvDisabled,
+  isBitlockerOff,
+} from "@/lib/posture-score"
+import { verifyAuditChain } from "@/lib/audit-chain"
 
 // Phase 7 Workstream D — Super Portal → FleetHub BFF: fleet
 // summary card data. The portal verifies the
@@ -71,11 +78,75 @@ export async function POST(req: NextRequest) {
     detail: { portalUserId },
   }).catch(() => undefined)
 
+  // Phase 8 WS-B step 6 — compliance posture score (0-100). Same
+  // formula MSP uses, scoped to this client's devices. Customer
+  // portal renders the chip only — they don't need the per-rule
+  // breakdown the staff /msp page shows.
+  type PostureSampleRow = {
+    backupLastSuccess: Date | null
+    backupProduct: string | null
+    avEngine: string | null
+    avEnabled: boolean | null
+    bitlockerOn: boolean | null
+  }
+  const [postureRows, tenantPosture, hostsBehindPatchRow, auditChain] = await Promise.all([
+    prisma.$queryRaw<PostureSampleRow[]>`
+      SELECT "backupLastSuccess", "backupProduct",
+             "avEngine", "avEnabled", "bitlockerOn"
+      FROM fleethub.fl_devices
+      WHERE "clientName" = ${clientName}
+        AND "isActive" = true
+        AND "maintenanceMode" = false
+    `.catch((): PostureSampleRow[] => []),
+    prisma.fl_Tenant.findUnique({ where: { name: clientName }, select: { hipaaMode: true } }),
+    // hostsBehindPatch — distinct devices with any state="missing"
+    // install. Same definition the MSP rollup uses.
+    prisma.fl_PatchInstall.findMany({
+      where: {
+        state: "missing",
+        // join via patch's tenant? No — Fl_PatchInstall.deviceId.
+        // We want count of distinct deviceIds whose device.clientName matches.
+      },
+      select: { deviceId: true },
+    }).then(async (rows) => {
+      if (rows.length === 0) return 0
+      const ids = Array.from(new Set(rows.map((r) => r.deviceId)))
+      const owned = await prisma.fl_Device.count({
+        where: { id: { in: ids }, clientName, isActive: true },
+      })
+      return owned
+    }).catch(() => 0),
+    verifyAuditChain().catch(() => ({ intact: true, brokenAt: null })),
+  ])
+
+  const now = Date.now()
+  let hostsBackupStale = 0
+  let hostsAvDisabled = 0
+  let hostsBitlockerOff = 0
+  for (const p of postureRows) {
+    if (isBackupStale(p.backupLastSuccess, p.backupProduct, now)) hostsBackupStale++
+    if (isAvDisabled(p.avEnabled, p.avEngine))                    hostsAvDisabled++
+    if (isBitlockerOff(p.bitlockerOn))                            hostsBitlockerOff++
+  }
+  const auditBroken =
+    !auditChain.intact && auditChain.brokenAt?.clientName === clientName
+
+  const postureScore = computePostureScore({
+    deviceTotal,
+    hostsBehindPatch: hostsBehindPatchRow,
+    hostsBackupStale,
+    hostsAvDisabled,
+    hostsBitlockerOff,
+    hipaaMode: Boolean(tenantPosture?.hipaaMode),
+    auditChainBroken: auditBroken,
+  }).score
+
   return NextResponse.json({
     deviceCount: deviceTotal,
     onlineCount: deviceOnline,
     hostsOffline24h,
     openAlerts,
+    postureScore,
     latestActivityAt: latestPatchScan?.lastSeenAt?.toISOString() ?? null,
     latestReport: latestReport
       ? { id: latestReport.id, kind: latestReport.kind, generatedAt: latestReport.generatedAt?.toISOString() ?? null }

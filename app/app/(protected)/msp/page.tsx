@@ -375,6 +375,7 @@ function TriageTable({
           <tr style={{ background: "var(--color-background-tertiary, rgba(148, 163, 184, 0.08))" }}>
             <Th align="left">Client</Th>
             <Th align="right">Risk</Th>
+            <Th align="right">Posture</Th>
             <Th align="right">Devices</Th>
             <Th align="right">Offline&nbsp;&gt;24h</Th>
             <Th align="right">Alerts</Th>
@@ -477,6 +478,17 @@ function Row({
         <Link href={`/clients/${enc}`} style={cellLinkStyle(scoreTone(client.riskScore))}>
           {client.riskScore}
         </Link>
+      </Td>
+      <Td align="right">
+        {client.deviceTotal === 0 ? dim() : (
+          <Link
+            href={`/clients/${enc}?tab=devices`}
+            style={cellLinkStyle(postureTone_(client.postureScore))}
+            title={postureTitle_(client)}
+          >
+            {client.postureScore}
+          </Link>
+        )}
       </Td>
       <Td align="right">
         {client.deviceTotal === 0 ? dim() : (
@@ -617,6 +629,33 @@ function scoreTone(score: number): Tone {
   if (score >= 10) return "warn"
   if (score > 0)   return "ok"
   return "neutral"
+}
+
+// Phase 8 WS-B step 5 — posture-score tone is the inverse of risk:
+// higher is better. Bands match lib/posture-score.ts.
+function postureTone_(score: number): Tone {
+  if (score >= 90) return "ok"
+  if (score >= 70) return "warn"
+  return "bad"
+}
+
+function postureTitle_(c: {
+  postureHostsBackupStale: number
+  postureHostsAvDisabled: number
+  postureHostsBitlockerOff: number
+  postureHipaaMode: boolean
+  hostsBehindPatch: number
+  auditChainStatus: "ok" | "broken-here"
+}): string {
+  const parts: string[] = []
+  if (c.hostsBehindPatch > 0) parts.push(`${c.hostsBehindPatch} behind patch`)
+  if (c.postureHostsBackupStale > 0) parts.push(`${c.postureHostsBackupStale} backup stale`)
+  if (c.postureHostsAvDisabled > 0) parts.push(`${c.postureHostsAvDisabled} AV disabled`)
+  if (c.postureHipaaMode && c.postureHostsBitlockerOff > 0) {
+    parts.push(`${c.postureHostsBitlockerOff} BitLocker off (HIPAA tenant)`)
+  }
+  if (c.auditChainStatus === "broken-here") parts.push("audit chain broken here")
+  return parts.length === 0 ? "No posture penalties." : parts.join(" · ")
 }
 
 function dim() {

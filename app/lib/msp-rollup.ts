@@ -4,6 +4,12 @@ import { prisma } from "@/lib/prisma"
 import { listAlerts } from "@/lib/alerts"
 import { listDevices, mockMode } from "@/lib/devices"
 import { verifyAuditChain, type AuditChainBreak } from "@/lib/audit-chain"
+import {
+  computePostureScore,
+  isBackupStale,
+  isAvDisabled,
+  isBitlockerOff,
+} from "@/lib/posture-score"
 
 // Phase 6 step 1 — cross-tenant MSP rollup. Pure data layer; consumed
 // by /msp triage view (step 2) and the /msp/export.csv endpoint
@@ -89,6 +95,15 @@ export interface MspRollupClient {
   mrrCents: number | null
   // Composite (§4)
   riskScore: number
+  // Phase 8 WS-B step 5 — compliance posture score (0-100).
+  // Computed from per-client posture aggregates (backup freshness,
+  // AV enabled, BitLocker on HIPAA tenants) plus the existing
+  // hostsBehindPatch + audit-chain signals. See PHASE-8-DESIGN §4.3.
+  postureScore: number
+  postureHostsBackupStale: number
+  postureHostsAvDisabled: number
+  postureHostsBitlockerOff: number
+  postureHipaaMode: boolean
   // Provenance — true when this client has no devices yet but has an
   // Fl_Tenant row (pre-created via /clients/new).
   pending: boolean
@@ -266,7 +281,7 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
             createdAt: true,
           },
         }),
-        prisma.fl_Tenant.findMany({ select: { name: true } }),
+        prisma.fl_Tenant.findMany({ select: { name: true, hipaaMode: true } }),
       ])
 
   // Audit chain is fleet-wide; one walk, applied per-client below.
@@ -379,6 +394,11 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
     openTickets: null,
     mrrCents: null,
     riskScore: 0,
+    postureScore: 100,
+    postureHostsBackupStale: 0,
+    postureHostsAvDisabled: 0,
+    postureHostsBitlockerOff: 0,
+    postureHipaaMode: false,
     pending,
   })
 
@@ -495,11 +515,65 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
     }
   }
 
+  // Phase 8 WS-B step 5 — posture aggregation. Pull per-device
+  // posture columns in a single $queryRaw (the columns aren't in
+  // the generated Prisma client yet). Aggregate into the byClient
+  // map, then compute the compliance score per client.
+  if (!isMock && deviceIds.length > 0) {
+    const hipaaByClient = new Map<string, boolean>()
+    for (const t of tenantRows) hipaaByClient.set(t.name, Boolean(t.hipaaMode))
+    for (const r of byClient.values()) {
+      r.postureHipaaMode = hipaaByClient.get(r.name) ?? false
+    }
+
+    type PostureSampleRow = {
+      clientName: string
+      backupLastSuccess: Date | null
+      backupProduct: string | null
+      avEngine: string | null
+      avEnabled: boolean | null
+      bitlockerOn: boolean | null
+    }
+    // Pull posture for every active non-maintenance device. The
+    // byClient filter below drops rows for clients outside scope —
+    // cheaper than parameterizing an IN with the device id set.
+    const postureRows = await prisma.$queryRaw<PostureSampleRow[]>`
+      SELECT "clientName",
+             "backupLastSuccess",
+             "backupProduct",
+             "avEngine",
+             "avEnabled",
+             "bitlockerOn"
+      FROM fleethub.fl_devices
+      WHERE "isActive" = true
+        AND "maintenanceMode" = false
+    `.catch((): PostureSampleRow[] => [])
+
+    for (const p of postureRows) {
+      const r = byClient.get(p.clientName)
+      if (!r) continue
+      if (isBackupStale(p.backupLastSuccess, p.backupProduct, now)) r.postureHostsBackupStale++
+      if (isAvDisabled(p.avEnabled, p.avEngine))                    r.postureHostsAvDisabled++
+      if (isBitlockerOff(p.bitlockerOn))                            r.postureHostsBitlockerOff++
+    }
+  }
+
   // Risk score — last pass, after all signals are settled.
   for (const r of byClient.values()) {
     const staleSchedule =
       r.scheduleStalenessMs != null && r.scheduleStalenessMs > SCHEDULE_STALE_MS
     r.riskScore = computeRiskScore(r, r.auditChainStatus === "broken-here", staleSchedule)
+    // Compliance posture score uses the same hostsBehindPatch +
+    // auditChain inputs as risk, plus the new posture aggregates.
+    r.postureScore = computePostureScore({
+      deviceTotal: r.deviceTotal,
+      hostsBehindPatch: r.hostsBehindPatch,
+      hostsBackupStale: r.postureHostsBackupStale,
+      hostsAvDisabled: r.postureHostsAvDisabled,
+      hostsBitlockerOff: r.postureHostsBitlockerOff,
+      hipaaMode: r.postureHipaaMode,
+      auditChainBroken: r.auditChainStatus === "broken-here",
+    }).score
   }
 
   // ─── Scope filter (HIPAA-READY §3 hook; v1 no-op when no scope passed)
