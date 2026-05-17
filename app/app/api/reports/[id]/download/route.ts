@@ -4,26 +4,43 @@ import path from "node:path"
 import { getSessionContext } from "@/lib/authz"
 import { prisma } from "@/lib/prisma"
 import { REPORTS_DIR } from "@/lib/reports/render"
+import { verifyReportDownloadToken } from "@/lib/portal-download-token"
 
 export const dynamic = "force-dynamic"
 
 // GET /api/reports/[id]/download — streams the PDF.
-// Auth: NextAuth session OR Bearer FLEETHUB_AGENT_SECRET. The bearer path
-// is what scheduled email/Slack delivery will use once Fl_ReportSchedule
-// lands; v1 also lets curl smoke-test the round trip.
+// Auth precedence:
+//   1. NextAuth session (staff browser).
+//   2. Bearer FLEETHUB_AGENT_SECRET (scheduled email/Slack delivery, curl smoke).
+//   3. Portal signed URL params ?t=<expMs>&s=<hex-hmac> using PORTAL_BFF_SECRET.
+//      Minted by the /api/bff/portal/fleet-report-download BFF after the BFF
+//      verifies the report's tenant matches the portal session's clientName.
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const { id } = await params
   const ctx = await getSessionContext()
-  if (!ctx) {
+  let authMethod: "session" | "bearer" | "portal" | null = ctx ? "session" : null
+  if (!authMethod) {
     const auth = req.headers.get("authorization") ?? ""
-    const secret = process.env.FLEETHUB_AGENT_SECRET ?? ""
-    if (!secret || auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 })
+    const bearerSecret = process.env.FLEETHUB_AGENT_SECRET ?? ""
+    if (bearerSecret && auth === `Bearer ${bearerSecret}`) {
+      authMethod = "bearer"
     }
   }
-  const { id } = await params
+  if (!authMethod) {
+    const t = req.nextUrl.searchParams.get("t")
+    const s = req.nextUrl.searchParams.get("s")
+    if (t && s) {
+      const v = verifyReportDownloadToken(id, t, s, process.env.PORTAL_BFF_SECRET ?? "")
+      if (v.ok) authMethod = "portal"
+      else return NextResponse.json({ error: v.reason }, { status: v.status })
+    }
+  }
+  if (!authMethod) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 })
+  }
   const report = await prisma.fl_Report.findUnique({ where: { id } })
   if (!report) {
     return NextResponse.json({ error: "report not found" }, { status: 404 })
