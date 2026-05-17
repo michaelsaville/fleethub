@@ -424,11 +424,11 @@ function SummaryTab({
     .filter((t) => ["RESOLVED", "CLOSED", "CANCELLED"].includes(t.status))
     .slice(0, 5)
   return (
-    <div style={{ display: "grid", gap: "16px", gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)" }}>
+    <div data-mobile-stack="kv-grid" style={{ display: "grid", gap: "16px", gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
         <Card title="Health (7-day average)">
           {inv ? (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "16px" }}>
+            <div data-mobile-stack="kv-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "16px" }}>
               <Gauge label="CPU"  pct={inv.health.cpu7d} />
               <Gauge label="RAM"  pct={inv.health.ramPct} />
               <Gauge label="Disk" pct={inv.health.diskPct} />

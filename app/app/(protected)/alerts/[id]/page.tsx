@@ -87,7 +87,7 @@ export default async function AlertDetailPage({
 
         <ActionRow alert={alert} isAdmin={isAdmin} />
 
-        <section style={{ display: "grid", gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr)", gap: "16px" }}>
+        <section data-mobile-stack="kv-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr)", gap: "16px" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             <Card title="Detail">
               {alert.detail ? (
@@ -259,6 +259,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 function KVGrid({ pairs }: { pairs: Array<[string, React.ReactNode]> }) {
   return (
     <dl
+      data-mobile-stack="kv-grid"
       style={{
         margin: 0,
         display: "grid",
