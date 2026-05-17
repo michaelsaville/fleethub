@@ -43,6 +43,43 @@ export default async function DeviceDetailPage({
   const device = await getDevice(id)
   if (!device) notFound()
 
+  // Cross-schema TicketHub back-reference (2026-05-17 wrap-up). Show
+  // open + recently-closed TH tickets linked to this device so the
+  // tech doesn't have to jump apps to see context. Failure is non-
+  // fatal — the schema is on a sibling app; silently hide if absent.
+  const ticketHubPublicUrl = (process.env.TICKETHUB_PUBLIC_URL || "https://tickethub.pcc2k.com").replace(/\/$/, "")
+  type ThTicketRow = {
+    id: string
+    ticketNumber: number
+    title: string
+    status: string
+    priority: string
+    updated_at: Date
+    client_name: string
+  }
+  let linkedTickets: ThTicketRow[] = []
+  try {
+    linkedTickets = await prisma.$queryRaw<ThTicketRow[]>`
+      SELECT t.id,
+             t."ticketNumber",
+             t.title,
+             t.status::text AS status,
+             t.priority::text AS priority,
+             t."updatedAt" AS updated_at,
+             c."name" AS client_name
+      FROM tickethub.th_tickets t
+      JOIN tickethub.th_clients c ON c.id = t."clientId"
+      WHERE t."fleetDeviceId" = ${id}
+        AND t."deletedAt" IS NULL
+      ORDER BY
+        CASE WHEN t.status IN ('RESOLVED','CLOSED','CANCELLED') THEN 1 ELSE 0 END,
+        t."updatedAt" DESC
+      LIMIT 20
+    `
+  } catch (err) {
+    console.warn("[devices/[id]] TicketHub linked-tickets unavailable:", (err as Error).message)
+  }
+
   const [alerts, activity, scriptRuns, fleet, maint, ctx, deviceMeta, remoteSessions] = await Promise.all([
     getDeviceAlerts(id),
     getDeviceActivity(id, 30),
@@ -105,7 +142,7 @@ export default async function DeviceDetailPage({
           }}
         />
         <TabNav active={tab} deviceId={device.id} />
-        {tab === "summary"  && <SummaryTab device={device} alerts={alerts} />}
+        {tab === "summary"  && <SummaryTab device={device} alerts={alerts} linkedTickets={linkedTickets} ticketHubPublicUrl={ticketHubPublicUrl} />}
         {tab === "system"   && <SystemTab device={device} />}
         {tab === "alerts"   && <AlertsTab alerts={alerts} />}
         {tab === "activity" && <ActivityFeed items={activity} title="Device activity" />}
@@ -315,9 +352,35 @@ function TabNav({ active, deviceId }: { active: TabId; deviceId: string }) {
   )
 }
 
-function SummaryTab({ device, alerts }: { device: DeviceRow; alerts: DeviceAlert[] }) {
+type LinkedTicket = {
+  id: string
+  ticketNumber: number
+  title: string
+  status: string
+  priority: string
+  updated_at: Date
+  client_name: string
+}
+
+function SummaryTab({
+  device,
+  alerts,
+  linkedTickets,
+  ticketHubPublicUrl,
+}: {
+  device: DeviceRow
+  alerts: DeviceAlert[]
+  linkedTickets: LinkedTicket[]
+  ticketHubPublicUrl: string
+}) {
   const inv = device.inventory
   const openAlerts = alerts.filter((a) => a.state === "open").slice(0, 3)
+  const openTickets = linkedTickets.filter(
+    (t) => !["RESOLVED", "CLOSED", "CANCELLED"].includes(t.status),
+  )
+  const recentClosed = linkedTickets
+    .filter((t) => ["RESOLVED", "CLOSED", "CANCELLED"].includes(t.status))
+    .slice(0, 5)
   return (
     <div style={{ display: "grid", gap: "16px", gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -383,6 +446,60 @@ function SummaryTab({ device, alerts }: { device: DeviceRow; alerts: DeviceAlert
               ["Timezone",   inv.os.timezone],
             ]} />
           ) : <Empty>No OS data.</Empty>}
+        </Card>
+        <Card title={`TicketHub tickets${openTickets.length ? ` · ${openTickets.length} open` : ""}`}>
+          {linkedTickets.length === 0 ? (
+            <Empty>No TicketHub tickets reference this device.</Empty>
+          ) : (
+            <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: "8px" }}>
+              {openTickets.slice(0, 5).map((t) => (
+                <li key={t.id} style={{ fontSize: "12px", lineHeight: 1.4 }}>
+                  <a
+                    href={`${ticketHubPublicUrl}/tickets/${t.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ color: "var(--color-text-primary)", textDecoration: "none" }}
+                  >
+                    <span style={{ fontFamily: "var(--font-mono, monospace)", color: "var(--color-text-secondary)" }}>
+                      #{t.ticketNumber}
+                    </span>{" "}
+                    {t.title}
+                  </a>
+                  <div style={{ fontSize: "10px", color: "var(--color-text-secondary)", marginTop: "2px" }}>
+                    {t.client_name} · {t.status.replace(/_/g, " ").toLowerCase()} · {t.priority.toLowerCase()} · updated{" "}
+                    {relativeLastSeen(new Date(t.updated_at))}
+                  </div>
+                </li>
+              ))}
+              {openTickets.length === 0 && (
+                <li style={{ fontSize: "11px", color: "var(--color-text-secondary)" }}>
+                  No open tickets.
+                </li>
+              )}
+              {recentClosed.length > 0 && (
+                <>
+                  <li style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--color-text-secondary)", marginTop: "6px" }}>
+                    Recently closed
+                  </li>
+                  {recentClosed.map((t) => (
+                    <li key={t.id} style={{ fontSize: "12px", lineHeight: 1.4 }}>
+                      <a
+                        href={`${ticketHubPublicUrl}/tickets/${t.id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: "var(--color-text-secondary)", textDecoration: "none" }}
+                      >
+                        <span style={{ fontFamily: "var(--font-mono, monospace)" }}>
+                          #{t.ticketNumber}
+                        </span>{" "}
+                        {t.title}
+                      </a>
+                    </li>
+                  ))}
+                </>
+              )}
+            </ul>
+          )}
         </Card>
       </div>
     </div>
