@@ -83,6 +83,56 @@ export async function updateStaffRole(formData: FormData) {
   revalidatePath("/setup/staff")
 }
 
+/// Strict-mode E.164: leading `+`, country digit 1-9, then 7-14 more
+/// digits. Twilio accepts a wider format but the dispatch path validates
+/// the same way; staying strict prevents "saved but won't send" surprises.
+const E164_RE = /^\+[1-9]\d{7,14}$/
+
+export async function updateStaffProfile(formData: FormData) {
+  const ctx = await requireAdmin()
+  const id = String(formData.get("id") ?? "")
+  if (!id) throw new Error("Missing id")
+
+  const existing = await prisma.fl_StaffUser.findUnique({ where: { id } })
+  if (!existing) throw new Error("Staff user not found")
+
+  const rawName = String(formData.get("name") ?? "").trim()
+  const name = rawName === "" ? null : rawName
+
+  const rawPhone = String(formData.get("phoneE164") ?? "").trim()
+  let phoneE164: string | null = null
+  if (rawPhone !== "") {
+    if (!E164_RE.test(rawPhone)) {
+      throw new Error("Phone must be E.164 format (e.g. +14155551234)")
+    }
+    phoneE164 = rawPhone
+  }
+
+  if (name === existing.name && phoneE164 === existing.phoneE164) {
+    // No-op. Don't write an audit line for "you saved with no change."
+    return
+  }
+
+  await prisma.fl_StaffUser.update({
+    where: { id },
+    data: { name, phoneE164 },
+  })
+  await writeAudit({
+    actorEmail: ctx.email,
+    action: "staff.profile.update",
+    outcome: "ok",
+    detail: {
+      email: existing.email,
+      nameFrom: existing.name,
+      nameTo: name,
+      phoneFrom: existing.phoneE164,
+      phoneTo: phoneE164,
+    },
+  })
+  revalidatePath("/setup/staff")
+  revalidatePath(`/setup/staff/${id}`)
+}
+
 export async function toggleStaffActive(formData: FormData) {
   const ctx = await requireAdmin()
   const id = String(formData.get("id") ?? "")

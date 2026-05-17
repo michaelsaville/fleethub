@@ -98,7 +98,12 @@ export default async function StaffPage() {
                   >
                     <td style={tdStyle}>
                       <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        <span>{r.email}</span>
+                        <Link
+                          href={`/setup/staff/${r.id}`}
+                          style={{ color: "inherit", textDecoration: "none" }}
+                        >
+                          {r.email}
+                        </Link>
                         {isSelf && <span style={selfBadgeStyle}>you</span>}
                       </div>
                     </td>
