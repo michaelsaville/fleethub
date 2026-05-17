@@ -2,6 +2,7 @@ import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import DeviceTable from "@/components/DeviceTable"
 import SeedBanner from "@/components/SeedBanner"
+import { Card } from "@/components/ui/Card"
 import { listDevices } from "@/lib/devices"
 
 export const dynamic = "force-dynamic"
@@ -107,17 +108,7 @@ function FilterStrip({
 
   const anyFilter = filters.client || filters.os || filters.online || filters.role
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "8px",
-        padding: "12px 14px",
-        background: "var(--color-background-secondary)",
-        border: "0.5px solid var(--color-border-tertiary)",
-        borderRadius: "10px",
-      }}
-    >
+    <Card padding="12px 14px" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
       <FacetRow label="OS">
         <FilterChip label="Any" href={withParam("os", undefined)} active={!filters.os} />
         <FilterChip label={`Windows · ${facets.osCounts.windows}`} href={withParam("os", "windows")} active={filters.os === "windows"} />
@@ -177,7 +168,7 @@ function FilterStrip({
           </Link>
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 

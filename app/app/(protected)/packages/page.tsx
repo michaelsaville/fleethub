@@ -1,5 +1,7 @@
 import Link from "next/link"
 import AppShell from "@/components/AppShell"
+import { Card } from "@/components/ui/Card"
+import { EmptyState } from "@/components/ui/EmptyState"
 import { prisma } from "@/lib/prisma"
 
 export const dynamic = "force-dynamic"
@@ -53,11 +55,9 @@ export default async function PackagesPage() {
         </header>
 
         {packages.length === 0 ? (
-          <div style={{ padding: 32, textAlign: "center", fontSize: 13, color: "var(--color-text-muted)", background: "var(--color-background-secondary)", border: "0.5px dashed var(--color-border-tertiary)", borderRadius: 10 }}>
-            No packages yet — add Chrome / Office / 7-Zip to get started.
-          </div>
+          <EmptyState body="No packages yet — add Chrome / Office / 7-Zip to get started." />
         ) : (
-          <div style={{ background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 10, overflow: "hidden" }}>
+          <Card padding={0} style={{ overflow: "hidden" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
               <thead>
                 <tr style={{ color: "var(--color-text-muted)", fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em" }}>
@@ -111,7 +111,7 @@ export default async function PackagesPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </Card>
         )}
       </div>
     </AppShell>

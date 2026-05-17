@@ -1,6 +1,8 @@
 import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import SeedBanner from "@/components/SeedBanner"
+import { Card } from "@/components/ui/Card"
+import { EmptyState } from "@/components/ui/EmptyState"
 import { listClients } from "@/lib/clients"
 import { mockMode } from "@/lib/devices"
 import { relativeLastSeen } from "@/lib/devices-time"
@@ -66,24 +68,18 @@ export default async function ClientsPage() {
         </section>
 
         {clients.length === 0 ? (
-          <div
-            style={{
-              padding: "40px",
-              textAlign: "center",
-              background: "var(--color-background-secondary)",
-              border: "0.5px solid var(--color-border-tertiary)",
-              borderRadius: "10px",
-              color: "var(--color-text-muted)",
-              fontSize: "13px",
-            }}
-          >
-            No clients yet. Use <strong>+ New client</strong> above to pre-create one,
-            or wait for the first agent to enroll (see{" "}
-            <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "12px" }}>
-              docs/AGENT-PROTOCOL.md
-            </code>
-            ).
-          </div>
+          <EmptyState
+            body={
+              <>
+                No clients yet. Use <strong>+ New client</strong> above to pre-create one,
+                or wait for the first agent to enroll (see{" "}
+                <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "12px" }}>
+                  docs/AGENT-PROTOCOL.md
+                </code>
+                ).
+              </>
+            }
+          />
         ) : (
           <section
             style={{
@@ -113,14 +109,7 @@ function SummaryCard({
 }) {
   const valueColor = tone === "warn" ? "var(--color-warning)" : tone === "ok" ? "var(--color-success)" : "var(--color-text-primary)"
   return (
-    <div
-      style={{
-        padding: "12px 14px",
-        background: "var(--color-background-secondary)",
-        border: "0.5px solid var(--color-border-tertiary)",
-        borderRadius: "10px",
-      }}
-    >
+    <Card padding="12px 14px">
       <div style={{ fontSize: "10px", fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
         {label}
       </div>
@@ -130,7 +119,7 @@ function SummaryCard({
       <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginTop: "4px" }}>
         {hint}
       </div>
-    </div>
+    </Card>
   )
 }
 

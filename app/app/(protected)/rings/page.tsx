@@ -1,5 +1,6 @@
-import Link from "next/link"
 import AppShell from "@/components/AppShell"
+import { Card } from "@/components/ui/Card"
+import { EmptyState } from "@/components/ui/EmptyState"
 import { prisma } from "@/lib/prisma"
 import { parseStages } from "@/lib/rings"
 import RingSeedButton from "./RingSeedButton"
@@ -29,15 +30,13 @@ export default async function RingsPage() {
         </header>
 
         {rings.length === 0 ? (
-          <div style={{ padding: 32, textAlign: "center", fontSize: 13, color: "var(--color-text-muted)", background: "var(--color-background-secondary)", border: "0.5px dashed var(--color-border-tertiary)", borderRadius: 10 }}>
-            No rings yet. Use “Seed default rings” to create the standard 4-stage + healthcare-conservative rings.
-          </div>
+          <EmptyState body="No rings yet. Use “Seed default rings” to create the standard 4-stage + healthcare-conservative rings." />
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {rings.map((r) => {
               const stages = parseStages(r.stagesJson)
               return (
-                <section key={r.id} style={{ background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 10, padding: 14 }}>
+                <Card key={r.id}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                     <div>
                       <strong style={{ fontSize: 14 }}>{r.name}</strong>
@@ -82,7 +81,7 @@ export default async function RingsPage() {
                       ))}
                     </tbody>
                   </table>
-                </section>
+                </Card>
               )
             })}
           </div>

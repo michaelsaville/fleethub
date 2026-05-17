@@ -2,6 +2,7 @@ import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import AlertsTable from "@/components/AlertsTable"
 import SeedBanner from "@/components/SeedBanner"
+import { Card } from "@/components/ui/Card"
 import { listAlerts } from "@/lib/alerts"
 import type { AlertSeverity, AlertState } from "@/lib/alerts"
 import { getSessionContext } from "@/lib/authz"
@@ -169,17 +170,7 @@ function FilterStrip({
   }
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "8px",
-        padding: "12px 14px",
-        background: "var(--color-background-secondary)",
-        border: "0.5px solid var(--color-border-tertiary)",
-        borderRadius: "10px",
-      }}
-    >
+    <Card padding="12px 14px" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
       <FacetRow label="State">
         <FilterChip label="Any"          href={withParam("state", "all")}      active={filters.state === "all"} />
         <FilterChip label="Open"         href={withParam("state", "open")}     active={filters.state === "open"} />
@@ -205,7 +196,7 @@ function FilterStrip({
           ))}
         </FacetRow>
       )}
-    </div>
+    </Card>
   )
 }
 

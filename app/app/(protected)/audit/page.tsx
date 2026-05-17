@@ -1,5 +1,6 @@
 import Link from "next/link"
 import AppShell from "@/components/AppShell"
+import { Card as UICard, CardHeader } from "@/components/ui/Card"
 import { listAuditEvents } from "@/lib/audit-events"
 import type { AuditEventRow } from "@/lib/audit-events"
 import { requireSession } from "@/lib/authz"
@@ -311,29 +312,10 @@ function Pager({
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section
-      style={{
-        background: "var(--color-background-secondary)",
-        border: "0.5px solid var(--color-border-tertiary)",
-        borderRadius: "10px",
-        overflow: "hidden",
-      }}
-    >
-      <div
-        style={{
-          padding: "10px 14px",
-          borderBottom: "0.5px solid var(--color-border-tertiary)",
-          fontSize: "11px",
-          fontWeight: 600,
-          color: "var(--color-text-muted)",
-          textTransform: "uppercase",
-          letterSpacing: "0.07em",
-        }}
-      >
-        {title}
-      </div>
-      <div style={{ padding: "14px" }}>{children}</div>
-    </section>
+    <UICard>
+      <CardHeader title={title} />
+      {children}
+    </UICard>
   )
 }
 

@@ -1,6 +1,7 @@
 import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import SeedBanner from "@/components/SeedBanner"
+import { Card as UICard, CardHeader } from "@/components/ui/Card"
 import { prisma } from "@/lib/prisma"
 import { getCompliance, getDiskPressure, getEolHosts, getFleetSnapshot, getLifecycle, getMemoryPressure, getOsDistribution, getStaleBoots } from "@/lib/reports"
 import type { ComplianceRow, EolHostRow, LifecycleRow, OsDistributionRow, PressureRow } from "@/lib/reports"
@@ -152,14 +153,7 @@ function SnapshotStrip({ snapshot }: { snapshot: { clients: number; devices: num
 function Tile({ label, value, hint, tone = "neutral" }: { label: string; value: string; hint: string; tone?: "neutral" | "ok" | "warn" }) {
   const color = tone === "warn" ? "var(--color-warning)" : tone === "ok" ? "var(--color-success)" : "var(--color-text-primary)"
   return (
-    <div
-      style={{
-        padding: "10px 12px",
-        background: "var(--color-background-secondary)",
-        border: "0.5px solid var(--color-border-tertiary)",
-        borderRadius: "8px",
-      }}
-    >
+    <UICard padding="10px 12px">
       <div style={{ fontSize: "10px", fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
         {label}
       </div>
@@ -169,7 +163,7 @@ function Tile({ label, value, hint, tone = "neutral" }: { label: string; value: 
       <div style={{ fontSize: "10.5px", color: "var(--color-text-muted)", marginTop: "3px" }}>
         {hint}
       </div>
-    </div>
+    </UICard>
   )
 }
 
@@ -367,29 +361,10 @@ function PressureCard({
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section
-      style={{
-        background: "var(--color-background-secondary)",
-        border: "0.5px solid var(--color-border-tertiary)",
-        borderRadius: "10px",
-        overflow: "hidden",
-      }}
-    >
-      <div
-        style={{
-          padding: "10px 14px",
-          borderBottom: "0.5px solid var(--color-border-tertiary)",
-          fontSize: "11px",
-          fontWeight: 600,
-          color: "var(--color-text-muted)",
-          textTransform: "uppercase",
-          letterSpacing: "0.07em",
-        }}
-      >
-        {title}
-      </div>
-      <div style={{ padding: "14px" }}>{children}</div>
-    </section>
+    <UICard>
+      <CardHeader title={title} />
+      {children}
+    </UICard>
   )
 }
 

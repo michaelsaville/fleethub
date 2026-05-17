@@ -1,5 +1,7 @@
 import Link from "next/link"
 import AppShell from "@/components/AppShell"
+import { Card } from "@/components/ui/Card"
+import { EmptyState } from "@/components/ui/EmptyState"
 import { prisma } from "@/lib/prisma"
 import { getSessionContext } from "@/lib/authz"
 
@@ -67,30 +69,15 @@ export default async function ScriptsPage({
         </nav>
 
         {rows.length === 0 ? (
-          <div
-            style={{
-              padding: "40px",
-              textAlign: "center",
-              background: "var(--color-background-secondary)",
-              border: "0.5px solid var(--color-border-tertiary)",
-              borderRadius: "10px",
-              color: "var(--color-text-muted)",
-              fontSize: "13px",
-            }}
-          >
-            {tab === "all"
-              ? "No scripts yet. Add your first one to start the library."
-              : `No scripts in this view.`}
-          </div>
+          <EmptyState
+            body={
+              tab === "all"
+                ? "No scripts yet. Add your first one to start the library."
+                : "No scripts in this view."
+            }
+          />
         ) : (
-          <section
-            style={{
-              background: "var(--color-background-secondary)",
-              border: "0.5px solid var(--color-border-tertiary)",
-              borderRadius: "10px",
-              overflow: "hidden",
-            }}
-          >
+          <Card padding={0} style={{ overflow: "hidden" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
               <thead>
                 <tr style={{ color: "var(--color-text-muted)", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.06em" }}>
@@ -135,7 +122,7 @@ export default async function ScriptsPage({
                 ))}
               </tbody>
             </table>
-          </section>
+          </Card>
         )}
       </div>
     </AppShell>

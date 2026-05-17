@@ -2,6 +2,8 @@ import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import SeedBanner from "@/components/SeedBanner"
 import SeedPatchesButton from "@/components/SeedPatchesButton"
+import { Card as UICard, CardHeader } from "@/components/ui/Card"
+import { EmptyState } from "@/components/ui/EmptyState"
 import { mockMode } from "@/lib/devices"
 import { getSessionContext } from "@/lib/authz"
 import {
@@ -373,11 +375,11 @@ function Tile({ label, value, hint, tone = "neutral" }: { label: string; value: 
     tone === "ok" ? "var(--color-success)" :
     "var(--color-text-primary)"
   return (
-    <div style={{ padding: "10px 12px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 8 }}>
+    <UICard padding="10px 12px">
       <div style={{ fontSize: 10, fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
       <div style={{ fontSize: 18, fontWeight: 600, color, lineHeight: 1.1, marginTop: 4 }}>{value}</div>
       <div style={{ fontSize: 10.5, color: "var(--color-text-muted)", marginTop: 3 }}>{hint}</div>
-    </div>
+    </UICard>
   )
 }
 
@@ -462,10 +464,10 @@ function StaleCheckInCard({ rows }: { rows: StaleCheckInRow[] }) {
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section style={{ background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 10, overflow: "hidden" }}>
-      <div style={{ padding: "10px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontSize: 11, fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>{title}</div>
-      <div style={{ padding: 14 }}>{children}</div>
-    </section>
+    <UICard>
+      <CardHeader title={title} />
+      {children}
+    </UICard>
   )
 }
 function Empty({ children }: { children: React.ReactNode }) {

@@ -1,5 +1,7 @@
 import Link from "next/link"
 import AppShell from "@/components/AppShell"
+import { Card } from "@/components/ui/Card"
+import { EmptyState as UIEmptyState } from "@/components/ui/EmptyState"
 import { requireSession } from "@/lib/authz"
 import {
   listMspRollup,
@@ -355,14 +357,7 @@ function TriageTable({
   ticketHubPublicUrl: string
 }) {
   return (
-    <div
-      style={{
-        overflowX: "auto",
-        background: "var(--color-background-secondary)",
-        border: "0.5px solid var(--color-border-tertiary)",
-        borderRadius: "10px",
-      }}
-    >
+    <Card padding={0} style={{ overflowX: "auto" }}>
       <table
         style={{
           width: "100%",
@@ -401,7 +396,7 @@ function TriageTable({
           ))}
         </tbody>
       </table>
-    </div>
+    </Card>
   )
 }
 
@@ -705,42 +700,30 @@ function formatAge(ms: number): string {
 function EmptyState({ signalFiltered }: { signalFiltered: boolean }) {
   if (signalFiltered) {
     return (
-      <div
-        style={{
-          padding: "40px",
-          textAlign: "center",
-          background: "var(--color-background-secondary)",
-          border: "0.5px solid var(--color-border-tertiary)",
-          borderRadius: "10px",
-          color: "var(--color-text-muted)",
-          fontSize: "13px",
-        }}
-      >
-        No clients with values in the chosen signal.{" "}
-        <Link href="/msp" style={{ color: "var(--color-accent, #F97316)", fontWeight: 600 }}>
-          Clear filter
-        </Link>
-        {" "}to see the full fleet.
-      </div>
+      <UIEmptyState
+        body={
+          <>
+            No clients with values in the chosen signal.{" "}
+            <Link href="/msp" style={{ color: "var(--color-accent, #F97316)", fontWeight: 600 }}>
+              Clear filter
+            </Link>
+            {" "}to see the full fleet.
+          </>
+        }
+      />
     )
   }
   return (
-    <div
-      style={{
-        padding: "40px",
-        textAlign: "center",
-        background: "var(--color-background-secondary)",
-        border: "0.5px solid var(--color-border-tertiary)",
-        borderRadius: "10px",
-        color: "var(--color-text-muted)",
-        fontSize: "13px",
-      }}
-    >
-      No managed clients yet. Add one from{" "}
-      <Link href="/clients/new" style={{ color: "var(--color-accent, #F97316)", fontWeight: 600 }}>
-        Clients &rsaquo; + New client
-      </Link>
-      , or wait for the first agent to enroll.
-    </div>
+    <UIEmptyState
+      body={
+        <>
+          No managed clients yet. Add one from{" "}
+          <Link href="/clients/new" style={{ color: "var(--color-accent, #F97316)", fontWeight: 600 }}>
+            Clients &rsaquo; + New client
+          </Link>
+          , or wait for the first agent to enroll.
+        </>
+      }
+    />
   )
 }
