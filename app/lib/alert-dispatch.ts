@@ -2,7 +2,19 @@ import "server-only"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { ALERT_CHANNEL_ADAPTERS } from "@/lib/alert-channels"
+import {
+  matchesAlert,
+  parseEscalationChain,
+  type MatchPredicate,
+  type ChannelConfig,
+  type EscalationStep,
+} from "@/lib/alert-match"
 import type { Fl_Alert } from "@prisma/client"
+
+// Re-export so existing callers that import these from
+// "@/lib/alert-dispatch" keep working.
+export { matchesAlert, parseEscalationChain }
+export type { MatchPredicate, ChannelConfig, EscalationStep }
 
 // Phase 7 Workstream A step 1 — match-route-and-dispatch core.
 // Synchronous in v1 per design §3.2: the alert writer awaits
@@ -20,40 +32,6 @@ export interface AlertInput {
   severity: "info" | "warn" | "critical"
   title: string
   detailJson?: string | null
-}
-
-interface MatchPredicate {
-  /** "critical" | "warn" | "info" | string[] | "*" */
-  severity?: string | string[]
-  /** Glob like "disk.*" or exact "agent.disconnected". Case-insensitive. */
-  kindLike?: string
-}
-
-interface ChannelConfig {
-  type: "slack" | "teams" | "email" | "sms" | "pagerduty" | "ticket"
-  /** Slack + Teams */
-  webhookUrl?: string
-  /** Email */
-  toEmails?: string[]
-  ccEmails?: string[]
-  /** SMS — array of E.164 phone numbers ("+14155551234"). */
-  phoneNumbers?: string[]
-  /** PagerDuty — Events API v2 integration key (lives on the channel
-   *  so different clients can route to different PD services from one
-   *  FleetHub install). */
-  integrationKey?: string
-  /** Phase 7 WS-A step 8 — when set on an email or sms channel,
-   *  recipients are resolved from the schedule's current on-call user
-   *  at dispatch time. Static toEmails/phoneNumbers are ignored when
-   *  this is present + resolves successfully. */
-  oncallScheduleId?: string
-  // (no remaining unimplemented channel-specific fields.)
-  [key: string]: unknown
-}
-
-interface EscalationStep {
-  afterMin: number
-  channels: ChannelConfig[]
 }
 
 /**
@@ -397,47 +375,7 @@ export async function forceEscalate(alertId: string): Promise<{
   return { status: "escalated", toStep: nextIndex + 1 }
 }
 
-/** Public for the escalator cron + the route-create UI. */
-export function parseEscalationChain(json: string | null): EscalationStep[] {
-  if (!json) return []
-  try {
-    const parsed = JSON.parse(json) as unknown
-    if (!Array.isArray(parsed)) return []
-    const out: EscalationStep[] = []
-    for (const s of parsed) {
-      if (!s || typeof s !== "object") continue
-      const step = s as { afterMin?: unknown; channels?: unknown }
-      const afterMin = typeof step.afterMin === "number" && step.afterMin > 0 ? step.afterMin : null
-      if (afterMin == null) continue
-      if (!Array.isArray(step.channels)) continue
-      out.push({ afterMin, channels: step.channels as ChannelConfig[] })
-    }
-    return out
-  } catch {
-    return []
-  }
-}
-
-
-/** Public for testing + reuse from Workstream B (runbooks share the predicate). */
-export function matchesAlert(predicate: MatchPredicate, alert: Fl_Alert): boolean {
-  if (predicate.severity !== undefined && predicate.severity !== "*") {
-    const wanted = Array.isArray(predicate.severity)
-      ? predicate.severity
-      : [predicate.severity]
-    if (!wanted.includes(alert.severity)) return false
-  }
-  if (predicate.kindLike !== undefined) {
-    if (!globMatch(predicate.kindLike, alert.kind)) return false
-  }
-  return true
-}
-
-/** Glob with `*` wildcard. Anchored full-string match, case-insensitive. */
-function globMatch(pattern: string, value: string): boolean {
-  const re = new RegExp(
-    "^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$",
-    "i",
-  )
-  return re.test(value)
-}
+// matchesAlert + parseEscalationChain + globMatch moved to
+// lib/alert-match.ts (Phase 8 WS-C §5.5) so vitest can import them
+// without dragging in the prisma module. Re-exported at the top of
+// this file for backward compat.
