@@ -68,6 +68,14 @@ export default async function SetupPage() {
             disabledHint={!isAdmin ? "ADMIN-only" : undefined}
           />
           <SetupCard
+            href="/setup/inbound-webhooks"
+            label="Inbound webhooks"
+            status={isAdmin ? "live" : "ADMIN-only"}
+            description="Per-tool URLs for UptimeRobot, Datadog, Sentry, or generic JSON. Posts become Fl_Alerts and flow through the same routing + escalation pipelines."
+            disabled={!isAdmin}
+            disabledHint={!isAdmin ? "ADMIN-only" : undefined}
+          />
+          <SetupCard
             href="/audit"
             label="Audit log"
             status={isAdmin ? "live" : "ADMIN-only"}
