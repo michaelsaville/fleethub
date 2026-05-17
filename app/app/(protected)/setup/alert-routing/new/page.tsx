@@ -5,12 +5,30 @@ import AlertRouteForm from "../AlertRouteForm"
 
 export const dynamic = "force-dynamic"
 
-export default async function NewAlertRoutePage() {
+// Cmd-K pre-fill (WS-D 6.3): `route <severity> <kind-glob> [client]`
+// emits a deep-link to this page with severity/kindLike/tenantName in
+// the query string. We accept those + thread them through to the form.
+const VALID_SEVERITIES = new Set(["critical", "warn", "info"])
+
+export default async function NewAlertRoutePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ severity?: string; kindLike?: string; tenantName?: string }>
+}) {
   await requireAdmin()
+  const sp = await searchParams
   const [tenantOptions, oncallOptions] = await Promise.all([
     loadTenantOptions(),
     loadOncallOptions(),
   ])
+
+  const prefillSeverity: ("critical" | "warn" | "info")[] = sp.severity && VALID_SEVERITIES.has(sp.severity)
+    ? [sp.severity as "critical" | "warn" | "info"]
+    : []
+  // Only honor tenantName when it's already a known tenant — silent
+  // miss is preferable to writing a bogus FK-ish value into the form.
+  const prefillTenant = sp.tenantName && tenantOptions.includes(sp.tenantName) ? sp.tenantName : null
+
   return (
     <AppShell>
       <div style={{ display: "flex", flexDirection: "column", gap: "16px", maxWidth: 760 }}>
@@ -26,9 +44,9 @@ export default async function NewAlertRoutePage() {
         <AlertRouteForm
           initial={{
             id: null,
-            tenantName: null,
-            severity: [],
-            kindLike: "",
+            tenantName: prefillTenant,
+            severity: prefillSeverity,
+            kindLike: sp.kindLike ?? "",
             channels: [],
             escalation: [],
             dedupWindowMin: 15,

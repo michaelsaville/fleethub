@@ -118,6 +118,36 @@ export async function parsePaletteCommand(query: string): Promise<PaletteCommand
     return resolveRunbookVerb(tokens.slice(1).join(" "), "untrip")
   }
 
+  // route <severity> <kind-glob> [client]
+  if (tokens[0] === "route" && tokens.length >= 3) {
+    return resolveRouteVerb(tokens.slice(1))
+  }
+
+  // oncall <schedule-name>
+  if (tokens[0] === "oncall" && tokens.length >= 2) {
+    return resolveOncallVerb(tokens.slice(1).join(" "))
+  }
+
+  // enroll device — no args; static OpsHub deep-link
+  if (tokens[0] === "enroll" && tokens[1] === "device") {
+    return resolveEnrollDevice()
+  }
+
+  // enable portal <client>
+  if (tokens[0] === "enable" && tokens[1] === "portal" && tokens.length >= 3) {
+    return resolveTenantTabVerb(tokens.slice(2).join(" "), "settings", "portal")
+  }
+
+  // branding <client>
+  if (tokens[0] === "branding" && tokens.length >= 2) {
+    return resolveTenantTabVerb(tokens.slice(1).join(" "), "branding", "branding")
+  }
+
+  // rustdesk id <host>
+  if (tokens[0] === "rustdesk" && tokens[1] === "id" && tokens.length >= 3) {
+    return resolveRustdeskIdVerb(tokens.slice(2).join(" "))
+  }
+
   return []
 }
 
@@ -652,5 +682,199 @@ async function resolveRunbookVerb(
       : "Open the runbook page to untrip (clears the circuit breaker)",
     href: `/runbooks/${r.id}`,
     icon: verb === "disable" ? "⏸" : "↻",
+  }))
+}
+
+// ─── route <severity> <kind-glob> [client] ─────────────────────────────
+//
+// Pre-fills the new-route form. Severity is the first token; kind-glob
+// is the next token; everything after that is the optional client name.
+// Routes can be tenant-scoped or "all tenants" (null). When the client
+// is given but doesn't match, we still emit a command with the client
+// name as a raw tenantName param — operator sees the resolution miss
+// in the form and can correct it.
+
+const VALID_SEVERITIES = new Set(["critical", "warn", "info"])
+
+async function resolveRouteVerb(rest: string[]): Promise<PaletteCommand[]> {
+  const severity = rest[0]?.toLowerCase()
+  if (!severity || !VALID_SEVERITIES.has(severity)) return []
+  const kindLike = rest[1]
+  if (!kindLike) return []
+  const clientPart = rest.slice(2).join(" ").trim()
+  const params = new URLSearchParams({
+    severity,
+    kindLike,
+  })
+  let tenantSummary = "every tenant"
+  if (clientPart) {
+    const tenant = await resolveTenantName(clientPart)
+    if (tenant) {
+      params.set("tenantName", tenant)
+      tenantSummary = tenant
+    } else {
+      // No match — still pre-fill the raw string so the operator can see
+      // the miss and pick from the dropdown.
+      params.set("tenantName", clientPart)
+      tenantSummary = `${clientPart} (no match)`
+    }
+  }
+  return [
+    {
+      id: `cmd:route:${severity}:${kindLike}:${clientPart || "all"}`,
+      category: "Commands" as const,
+      label: `Route — ${severity} ${kindLike} → ${tenantSummary}`,
+      hint: "Pre-fills /setup/alert-routing/new with severity, kind glob, and tenant",
+      href: `/setup/alert-routing/new?${params.toString()}`,
+      icon: "🚦",
+    },
+  ]
+}
+
+async function resolveTenantName(query: string): Promise<string | null> {
+  const lower = query.trim().toLowerCase()
+  // Try Fl_Tenant first; fall back to distinct Fl_Device.clientName.
+  const tenant = await prisma.fl_Tenant.findFirst({
+    where: { name: { contains: lower, mode: "insensitive" } },
+    orderBy: { name: "asc" },
+    select: { name: true },
+  })
+  if (tenant) return tenant.name
+  const dev = await prisma.fl_Device.findFirst({
+    where: {
+      isActive: true,
+      clientName: { contains: lower, mode: "insensitive" },
+    },
+    orderBy: { clientName: "asc" },
+    select: { clientName: true },
+  })
+  return dev?.clientName ?? null
+}
+
+// ─── oncall <schedule-name> ─────────────────────────────────────────────
+
+async function resolveOncallVerb(query: string): Promise<PaletteCommand[]> {
+  const q = query.trim()
+  if (q.length < 2) return []
+  const schedules = await prisma.fl_OncallSchedule.findMany({
+    where: { name: { contains: q, mode: "insensitive" } },
+    orderBy: [{ isActive: "desc" }, { name: "asc" }],
+    take: MAX_PER_VERB,
+    select: { id: true, name: true, isActive: true },
+  })
+  return schedules.map((s) => ({
+    id: `cmd:oncall:${s.id}`,
+    category: "Commands" as const,
+    label: `On-call — ${s.name}`,
+    hint: s.isActive ? "Open the schedule editor" : "Inactive — open the schedule editor",
+    href: `/setup/oncall-schedules/${s.id}`,
+    icon: "📅",
+  }))
+}
+
+// ─── enroll device — static OpsHub deep-link ───────────────────────────
+
+function resolveEnrollDevice(): PaletteCommand[] {
+  const opshubUrl = (process.env.OPSHUB_PUBLIC_URL || "https://opshub.pcc2k.com").replace(/\/$/, "")
+  return [
+    {
+      id: "cmd:enroll-device",
+      category: "Commands" as const,
+      label: "Enroll device — OpsHub",
+      hint: "Opens OpsHub /agents/new in a new tab",
+      href: `${opshubUrl}/agents/new`,
+      icon: "➕",
+    },
+  ]
+}
+
+// ─── enable portal / branding — both deep-link a tenant tab ────────────
+
+async function resolveTenantTabVerb(
+  query: string,
+  tab: "settings" | "branding",
+  hashAnchor: "portal" | "branding",
+): Promise<PaletteCommand[]> {
+  const q = query.trim()
+  if (q.length < 1) return []
+  const tenants = await prisma.fl_Tenant.findMany({
+    where: { name: { contains: q, mode: "insensitive" } },
+    orderBy: { name: "asc" },
+    take: MAX_PER_VERB,
+    select: { name: true, portalEnabled: true },
+  })
+  // Fall back to distinct device-derived names when no Fl_Tenant matches.
+  // Useful when a client only exists by virtue of having enrolled devices.
+  if (tenants.length === 0) {
+    const devs = await prisma.fl_Device.findMany({
+      where: {
+        isActive: true,
+        clientName: { contains: q, mode: "insensitive" },
+      },
+      distinct: ["clientName"],
+      orderBy: { clientName: "asc" },
+      take: MAX_PER_VERB,
+      select: { clientName: true },
+    })
+    return devs.map((d) => ({
+      id: `cmd:${tab}:${d.clientName}`,
+      category: "Commands" as const,
+      label: tab === "settings"
+        ? `Enable portal — ${d.clientName}`
+        : `Branding — ${d.clientName}`,
+      hint: `Open /clients/${d.clientName}?tab=${tab}#${hashAnchor}`,
+      href: `/clients/${encodeURIComponent(d.clientName)}?tab=${tab}#${hashAnchor}`,
+      icon: tab === "settings" ? "🌐" : "🎨",
+    }))
+  }
+  return tenants.map((t) => {
+    const portalHint =
+      tab === "settings"
+        ? t.portalEnabled
+          ? "Portal currently ON — open settings to adjust"
+          : "Portal currently OFF — open settings to enable"
+        : "Open the branding tab"
+    return {
+      id: `cmd:${tab}:${t.name}`,
+      category: "Commands" as const,
+      label: tab === "settings" ? `Enable portal — ${t.name}` : `Branding — ${t.name}`,
+      hint: portalHint,
+      href: `/clients/${encodeURIComponent(t.name)}?tab=${tab}#${hashAnchor}`,
+      icon: tab === "settings" ? "🌐" : "🎨",
+    }
+  })
+}
+
+// ─── rustdesk id <host> ────────────────────────────────────────────────
+
+async function resolveRustdeskIdVerb(hostQuery: string): Promise<PaletteCommand[]> {
+  const q = hostQuery.trim()
+  if (q.length < 1) return []
+  const devices = await prisma.fl_Device.findMany({
+    where: {
+      isActive: true,
+      OR: [
+        { hostname: { contains: q, mode: "insensitive" } },
+        { ipAddress: { contains: q, mode: "insensitive" } },
+      ],
+    },
+    orderBy: [{ isOnline: "desc" }, { lastSeenAt: "desc" }],
+    take: MAX_PER_VERB,
+    select: {
+      id: true,
+      hostname: true,
+      clientName: true,
+      rustdeskId: true,
+    },
+  })
+  return devices.map((d) => ({
+    id: `cmd:rustdesk-id:${d.id}`,
+    category: "Commands" as const,
+    label: `RustDesk ID — ${d.hostname}`,
+    hint: d.rustdeskId
+      ? `${d.clientName} · current ID: ${d.rustdeskId}`
+      : `${d.clientName} · not yet set`,
+    href: `/devices/${d.id}?tab=remote#rustdesk-id`,
+    icon: "🖥",
   }))
 }
