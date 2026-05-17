@@ -1,6 +1,8 @@
 import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import SeedBanner from "@/components/SeedBanner"
+import { Card } from "@/components/ui/Card"
+import { EmptyState } from "@/components/ui/EmptyState"
 import { mockMode } from "@/lib/devices"
 import {
   getFleetSoftwarePosture,
@@ -113,18 +115,20 @@ async function DriftTab() {
 
   if (allDrift.length === 0) {
     return (
-      <div style={{ padding: 32, textAlign: "center", fontSize: 13, color: "var(--color-text-muted)", background: "var(--color-background-secondary)", border: "0.5px dashed var(--color-border-tertiary)", borderRadius: 10 }}>
-        Add approved packages on{" "}
-        <Link href="/packages" style={{ color: "var(--color-accent)" }}>
-          /packages
-        </Link>{" "}
-        to compute drift against the fleet's installed-software inventory.
-      </div>
+      <EmptyState
+        body={
+          <>
+            Add approved packages on{" "}
+            <Link href="/packages" style={{ color: "var(--color-accent)" }}>/packages</Link>{" "}
+            to compute drift against the fleet&rsquo;s installed-software inventory.
+          </>
+        }
+      />
     )
   }
 
   return (
-    <div style={{ background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 10, overflow: "hidden" }}>
+    <Card padding={0} style={{ overflow: "hidden" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
         <thead>
           <tr style={{ color: "var(--color-text-muted)", fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em" }}>
@@ -189,7 +193,7 @@ async function DriftTab() {
           })}
         </tbody>
       </table>
-    </div>
+    </Card>
   )
 }
 
@@ -218,7 +222,7 @@ async function CatalogTab() {
     orderBy: [{ tenantName: "asc" }, { name: "asc" }],
   })
   return (
-    <div style={{ background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 10, padding: 14 }}>
+    <Card>
       {packages.length === 0 ? (
         <p style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
           No packages yet. Visit{" "}
@@ -241,7 +245,7 @@ async function CatalogTab() {
           ))}
         </ul>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -268,7 +272,7 @@ function Tile({ label, value, hint }: { label: string; value: string; hint: stri
 
 function TopAppsCard({ rows, totalDevices }: { rows: TopAppRow[]; totalDevices: number }) {
   return (
-    <Card title={`Top installed apps · ${rows.length}`}>
+    <TitledCard title={`Top installed apps · ${rows.length}`}>
       {rows.length === 0 ? <Empty /> : (
         <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 10 }}>
           {rows.map((r) => (
@@ -284,13 +288,13 @@ function TopAppsCard({ rows, totalDevices }: { rows: TopAppRow[]; totalDevices: 
           ))}
         </ul>
       )}
-    </Card>
+    </TitledCard>
   )
 }
 
 function HeavyHostsCard({ rows }: { rows: HeavyHostRow[] }) {
   return (
-    <Card title={`Most software per host · ${rows.length}`}>
+    <TitledCard title={`Most software per host · ${rows.length}`}>
       {rows.length === 0 ? <Empty /> : (
         <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 6 }}>
           {rows.map((r) => (
@@ -303,13 +307,13 @@ function HeavyHostsCard({ rows }: { rows: HeavyHostRow[] }) {
           ))}
         </ul>
       )}
-    </Card>
+    </TitledCard>
   )
 }
 
 function ClientRollupCard({ rows }: { rows: ClientSoftwareRollup[] }) {
   return (
-    <Card title="Per-client install footprint">
+    <TitledCard title="Per-client install footprint">
       {rows.length === 0 ? <Empty /> : (
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
@@ -332,16 +336,16 @@ function ClientRollupCard({ rows }: { rows: ClientSoftwareRollup[] }) {
           </tbody>
         </table>
       )}
-    </Card>
+    </TitledCard>
   )
 }
 
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
+function TitledCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section style={{ background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 10, overflow: "hidden" }}>
+    <Card padding={0} style={{ overflow: "hidden" }}>
       <div style={{ padding: "10px 14px", borderBottom: "0.5px solid var(--color-border-tertiary)", fontSize: 11, fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>{title}</div>
       <div style={{ padding: 14 }}>{children}</div>
-    </section>
+    </Card>
   )
 }
 
