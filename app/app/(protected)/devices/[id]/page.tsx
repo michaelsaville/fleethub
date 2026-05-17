@@ -282,17 +282,13 @@ function ActionBar({
   maintenance: { on: boolean; until: string | null; reason: string | null }
   remote: { rustdeskId: string | null; enabled: boolean; requiresJustification: boolean; canOpen: boolean }
 }) {
-  // Per UI-PATTERNS.md #1: "Big visible action bar at the top." Phase 3
-  // ships Maintenance Mode as the first live action; Phase 7 ships
-  // Remote. The rest are still phase-tooltipped until their feature
-  // ships.
-  const actions = [
-    { label: "Quick Job",  phase: "Phase 2" },
-    { label: "Patch Now",  phase: "Phase 4" },
-    { label: "Reboot",     phase: "Phase 2" },
-    { label: "Run script", phase: "Phase 2" },
-    { label: "More ⋯",     phase: "Phase 1+" },
-  ]
+  // Per UI-PATTERNS.md #1: "Big visible action bar at the top."
+  // Phase 8 §6.5: only surface buttons whose backends ship today.
+  // The earlier "Quick Job / Patch Now / Reboot / Run script / More ⋯"
+  // disabled-button row was a row of placebos; per the design
+  // contract, hide rather than show-as-disabled. Run-script is
+  // reachable via Cmd-K (`run script <name> on <host>`) and patches
+  // via /patches; Quick Job + Reboot are post-Phase-8.
   return (
     <div
       data-mobile-stack="actions"
@@ -320,26 +316,6 @@ function ActionBar({
         requiresJustification={remote.requiresJustification}
         canOpen={remote.canOpen}
       />
-      {actions.map((a) => (
-        <button
-          key={a.label}
-          type="button"
-          disabled
-          title={`${a.label} ships in ${a.phase}`}
-          style={{
-            padding: "6px 12px",
-            fontSize: "12px",
-            fontWeight: 500,
-            borderRadius: "6px",
-            border: "0.5px solid var(--color-border-tertiary)",
-            background: "transparent",
-            color: "var(--color-text-muted)",
-            cursor: "not-allowed",
-          }}
-        >
-          {a.label}
-        </button>
-      ))}
     </div>
   )
 }
@@ -1297,6 +1273,25 @@ function RemoteTab({
             </span>
           )}
         </div>
+
+        {/* First-time RustDesk handler hint — clicking "Remote in" up
+            top fires a rustdesk:// deep link. Browsers without a
+            registered handler show their own "no app to open this"
+            prompt and nothing happens. Surface a one-liner so the
+            operator knows what to install. */}
+        <details style={{ fontSize: 12, marginTop: 4 }}>
+          <summary style={{ cursor: "pointer", color: "var(--color-text-secondary)" }}>
+            “Remote in” doesn’t open anything?
+          </summary>
+          <div style={{ marginTop: 8, padding: "8px 10px", background: "var(--color-background-tertiary, rgba(148, 163, 184, 0.08))", borderRadius: 6, lineHeight: 1.55 }}>
+            The button fires a <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>rustdesk://</code> deep link.
+            Your browser asks the OS to hand it off to the RustDesk client. If
+            nothing happens or you see a “no app registered” prompt, install
+            the client once: <a href="https://rustdesk.com/" target="_blank" rel="noopener noreferrer" style={{ color: "var(--color-accent, #F97316)" }}>rustdesk.com</a>.
+            The first launch typically prompts the OS to remember the protocol;
+            subsequent “Remote in” clicks should open RustDesk silently.
+          </div>
+        </details>
       </section>
 
       <h2 style={{ fontSize: 13, fontWeight: 600, margin: 0, letterSpacing: "-0.01em" }}>
