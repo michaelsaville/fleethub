@@ -148,6 +148,19 @@ export async function parsePaletteCommand(query: string): Promise<PaletteCommand
     return resolveRustdeskIdVerb(tokens.slice(2).join(" "))
   }
 
+  // monitor <q>
+  if (tokens[0] === "monitor" && tokens.length >= 2) {
+    return resolveMonitorVerb(tokens.slice(1).join(" "))
+  }
+
+  // inbound webhook <q> / webhook <q>
+  if (tokens[0] === "inbound" && tokens[1] === "webhook" && tokens.length >= 3) {
+    return resolveInboundWebhookVerb(tokens.slice(2).join(" "))
+  }
+  if (tokens[0] === "webhook" && tokens.length >= 2) {
+    return resolveInboundWebhookVerb(tokens.slice(1).join(" "))
+  }
+
   return []
 }
 
@@ -876,5 +889,67 @@ async function resolveRustdeskIdVerb(hostQuery: string): Promise<PaletteCommand[
       : `${d.clientName} · not yet set`,
     href: `/devices/${d.id}?tab=remote#rustdesk-id`,
     icon: "🖥",
+  }))
+}
+
+// ─── monitor <q> ───────────────────────────────────────────────────────
+
+async function resolveMonitorVerb(query: string): Promise<PaletteCommand[]> {
+  const q = query.trim()
+  if (q.length < 2) return []
+  const monitors = await prisma.fl_Monitor.findMany({
+    where: { name: { contains: q, mode: "insensitive" } },
+    orderBy: [{ isActive: "desc" }, { name: "asc" }],
+    take: MAX_PER_VERB,
+    select: { id: true, name: true, severity: true, isActive: true, tenantName: true },
+  })
+  return monitors.map((m) => {
+    const tenantSummary = m.tenantName ? m.tenantName : "all tenants"
+    return {
+      id: `cmd:monitor:${m.id}`,
+      category: "Commands" as const,
+      label: `Monitor — ${m.name}`,
+      hint: m.isActive
+        ? `${m.severity} · ${tenantSummary}`
+        : `${m.severity} · ${tenantSummary} · disabled`,
+      href: `/monitors/${m.id}`,
+      icon: "📈",
+    }
+  })
+}
+
+// ─── inbound webhook <q> ──────────────────────────────────────────────
+
+async function resolveInboundWebhookVerb(query: string): Promise<PaletteCommand[]> {
+  const q = query.trim()
+  if (q.length < 2) return []
+  const hooks = await prisma.fl_InboundWebhook.findMany({
+    where: {
+      OR: [
+        { name: { contains: q, mode: "insensitive" } },
+        { source: { contains: q, mode: "insensitive" } },
+        { tenantName: { contains: q, mode: "insensitive" } },
+      ],
+    },
+    orderBy: [{ isActive: "desc" }, { name: "asc" }],
+    take: MAX_PER_VERB,
+    select: {
+      id: true,
+      name: true,
+      source: true,
+      tenantName: true,
+      isActive: true,
+      lastFiredAt: true,
+    },
+  })
+  return hooks.map((h) => ({
+    id: `cmd:inbound-webhook:${h.id}`,
+    category: "Commands" as const,
+    label: `Inbound webhook — ${h.name}`,
+    hint: h.isActive
+      ? `${h.source} · ${h.tenantName}${h.lastFiredAt ? ` · last ${h.lastFiredAt.toISOString().slice(0, 10)}` : " · never fired"}`
+      : `${h.source} · ${h.tenantName} · disabled`,
+    href: `/setup/inbound-webhooks#row-${h.id}`,
+    icon: "📡",
   }))
 }

@@ -126,7 +126,7 @@ export function InboundWebhooksClient({
               {rows.map((r) => {
                 const tokenShown = revealed[r.id]
                 return (
-                  <tr key={r.id} style={{ borderTop: "0.5px solid var(--color-border-tertiary)", verticalAlign: "top" }}>
+                  <tr key={r.id} id={`row-${r.id}`} style={{ borderTop: "0.5px solid var(--color-border-tertiary)", verticalAlign: "top" }}>
                     <Td align="left">
                       <div style={{ fontWeight: 600, color: "var(--color-text-primary)" }}>{r.name}</div>
                       {tokenShown ? (
