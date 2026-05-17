@@ -419,6 +419,75 @@ model Fl_RunbookFire {
 /// schedule-create time, so rotation edits take effect instantly.
 /// Timezone is UTC across the board; DST-aware semantics are
 /// punted to v1.5 per PHASE-7-DESIGN §12.
+/// Phase 8 Workstream A — operator-authored alert threshold.
+/// Cron-evaluates against telemetry tables (Fl_PerformanceSample;
+/// Fl_InventorySample when WS-B lands) and emits Fl_Alert via the
+/// existing writeAlert() helper. Every Phase 7 routing/escalation
+/// /runbook reaction then fires as if the alert came from the agent.
+model Fl_Monitor {
+  id              String   @id @default(cuid())
+  name            String
+  /// Null = applies to all tenants.
+  tenantName      String?
+  /// Bounded metric set — one resolver per kind, declared in
+  /// app/lib/monitor-evaluator.ts. Initial set covers perf.*; inv.*
+  /// lands when Fl_InventorySample does.
+  metric          String
+  /// JSON predicate scoped to the metric. v1 shape:
+  ///   { operator: "lt"|"gt"|"eq"|"neq", value: number,
+  ///     osFilter?: "windows"|"linux"|"darwin",
+  ///     deviceTag?: string,
+  ///     forMin?: number  // sustain window (default 15) }
+  predicateJson   String
+  severity        String   // "critical" | "warn" | "info"
+  /// Alert kind to emit. Operators can override (e.g. "disk.full")
+  /// so the existing Fl_AlertRoute matchJson rules fire without a
+  /// rebuild. Defaults to "monitor.<sanitized-name>" at create time.
+  emitKind        String
+  /// Cooldown per (deviceId, monitorId). 0 disables. Prevents
+  /// flapping when the metric oscillates around the threshold.
+  cooldownMin     Int      @default(30)
+  isActive        Boolean  @default(true)
+  /// Operator email/id who created this monitor. Free-text — no FK
+  /// to Fl_StaffUser because monitors can outlive a staff row, and
+  /// the deactivate-then-add reactivation flow would reuse the
+  /// same email anyway.
+  createdBy       String
+  /// Bookkeeping the evaluator updates so the operator can see
+  /// "this evaluated N seconds ago" on the detail page.
+  lastEvaluatedAt DateTime?
+  lastFiredAt     DateTime?
+  fireCount       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  fires           Fl_MonitorFire[]
+
+  @@index([isActive, tenantName])
+  @@map("fl_monitors")
+  @@schema("fleethub")
+}
+
+/// Phase 8 Workstream A — per-(monitor, device) fire history.
+/// Drives the recent-firings table on the monitor detail page +
+/// is the cooldown lookup target (last fire per device).
+model Fl_MonitorFire {
+  id           String    @id @default(cuid())
+  monitorId    String
+  monitor      Fl_Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  deviceId     String
+  /// Fl_Alert.id this fire produced; null if writeAlert failed.
+  alertId      String?
+  /// Snapshot of the value that crossed the threshold — for the
+  /// detail-page "value was X when this fired" surfacing.
+  observedValue Float?
+  firedAt      DateTime  @default(now())
+
+  @@index([monitorId, firedAt])
+  @@index([monitorId, deviceId, firedAt])
+  @@map("fl_monitor_fires")
+  @@schema("fleethub")
+}
+
 model Fl_OncallSchedule {
   id              String   @id @default(cuid())
   name            String   // "Ops primary", "Healthcare on-call"
