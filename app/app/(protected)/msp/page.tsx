@@ -366,7 +366,7 @@ function TriageTable({
       <table
         style={{
           width: "100%",
-          minWidth: ticketHubAvailable ? 1200 : 1100,
+          minWidth: ticketHubAvailable ? 1320 : 1100,
           borderCollapse: "collapse",
           fontSize: "12.5px",
         }}
@@ -386,6 +386,7 @@ function TriageTable({
             <Th align="right">Schedule</Th>
             <Th align="center">Audit</Th>
             {ticketHubAvailable && <Th align="right">Tickets</Th>}
+            {ticketHubAvailable && <Th align="right">MRR</Th>}
           </tr>
         </thead>
         <tbody>
@@ -566,6 +567,24 @@ function Row({
               style={cellLinkStyle(client.openTickets >= 5 ? "bad" : client.openTickets >= 2 ? "warn" : "neutral")}
             >
               {client.openTickets}
+            </a>
+          )}
+        </Td>
+      )}
+      {ticketHubAvailable && (
+        <Td align="right">
+          {client.mrrCents == null || client.mrrCents === 0 ? dim() : (
+            <a
+              href={`${ticketHubPublicUrl}/clients`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                ...cellLinkStyle("neutral"),
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              }}
+              title="Cadence-normalized monthly recurring revenue from TicketHub contracts"
+            >
+              ${(client.mrrCents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </a>
           )}
         </Td>

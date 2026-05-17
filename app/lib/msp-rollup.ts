@@ -81,6 +81,12 @@ export interface MspRollupClient {
   // this client. See MspRollupResult.ticketHubAvailable for the
   // "should I render this column at all?" flag.
   openTickets: number | null
+  // TicketHub overlay — monthly recurring revenue in cents, cadence-
+  // normalized (annual ÷ 12, quarterly ÷ 3, ONE_OFF excluded). Sum
+  // across the client's ACTIVE RECURRING non-template contracts. null
+  // when TH is unavailable; 0 when TH is present but the client has
+  // no live recurring contracts.
+  mrrCents: number | null
   // Composite (§4)
   riskScore: number
   // Provenance — true when this client has no devices yet but has an
@@ -281,6 +287,7 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
   // committed-to as a contract by the TH side — Phase 6.1 follow-up.
   const ticketHubPublicUrl = (process.env.TICKETHUB_PUBLIC_URL || "https://tickethub.pcc2k.com").replace(/\/$/, "")
   const ticketCounts = new Map<string, number>()
+  const mrrByClient = new Map<string, number>()
   let ticketHubAvailable = false
   if (!isMock) {
     try {
@@ -296,6 +303,56 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
     } catch (err) {
       ticketHubAvailable = false
       console.warn("[msp-rollup] TicketHub overlay unavailable:", (err as Error).message)
+    }
+  }
+  // TicketHub MRR overlay — same cross-schema pattern as the tickets
+  // count above. Cadence-normalized: ANNUAL÷12, QUARTERLY÷3, ONE_OFF
+  // excluded. Subscription-driven seat-count drift is ignored at this
+  // level — the operator's per-client contracts page does the precise
+  // math; /msp is a triage overview. Gated on ticketHubAvailable so a
+  // missing TH schema silently hides the column instead of breaking.
+  if (ticketHubAvailable) {
+    try {
+      const rows = await prisma.$queryRaw<{
+        client_name: string
+        cadence: string
+        monthly_fee: number | null
+        items_sum: bigint
+      }[]>`
+        SELECT
+          cl."name" AS client_name,
+          c.cadence::text AS cadence,
+          c."monthlyFee" AS monthly_fee,
+          COALESCE((
+            SELECT SUM(ROUND(COALESCE(r."unitPriceOverride", ci."defaultPrice", 0) * r.quantity))
+            FROM tickethub.th_contract_recurring_items r
+            LEFT JOIN tickethub.th_items ci ON ci.id = r."itemId"
+            WHERE r."contractId" = c.id
+          ), 0)::bigint AS items_sum
+        FROM tickethub.th_contracts c
+        JOIN tickethub.th_clients cl ON cl.id = c."clientId"
+        WHERE c.type = 'RECURRING'
+          AND c.status = 'ACTIVE'
+          AND c."isTemplate" = FALSE
+      `
+      for (const r of rows) {
+        // Months per cycle by cadence; ONE_OFF excluded from MRR.
+        const months =
+          r.cadence === "MONTHLY" ? 1 :
+          r.cadence === "QUARTERLY" ? 3 :
+          r.cadence === "ANNUAL" ? 12 :
+          null
+        if (months == null) continue
+        const itemsSum = Number(r.items_sum)
+        const perCycle = itemsSum > 0 ? itemsSum : (r.monthly_fee ?? 0)
+        const mrr = Math.round(perCycle / months)
+        mrrByClient.set(r.client_name, (mrrByClient.get(r.client_name) ?? 0) + mrr)
+      }
+    } catch (err) {
+      // Don't toggle ticketHubAvailable — the tickets count succeeded;
+      // a fresh failure here likely means the cadence column is older
+      // than this code expects (e.g. mid-deploy). Log + carry on.
+      console.warn("[msp-rollup] TicketHub MRR overlay unavailable:", (err as Error).message)
     }
   }
 
@@ -320,6 +377,7 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
     scheduleCount: 0,
     auditChainStatus: "ok",
     openTickets: null,
+    mrrCents: null,
     riskScore: 0,
     pending,
   })
@@ -433,6 +491,7 @@ export async function listMspRollup(opts: MspRollupOpts = {}): Promise<MspRollup
   if (ticketHubAvailable) {
     for (const r of byClient.values()) {
       r.openTickets = ticketCounts.get(r.name) ?? 0
+      r.mrrCents = mrrByClient.get(r.name) ?? 0
     }
   }
 
