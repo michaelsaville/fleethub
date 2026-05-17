@@ -1,13 +1,7 @@
 import "server-only"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
-import { postAlertToSlack, postAlertToTeams } from "@/lib/webhook-delivery"
-import { sendAlertEmail } from "@/lib/m365-mail"
-import { sendAlertSms, redactPhone } from "@/lib/sms-twilio"
-import { sendAlertToPagerDuty, redactPdKey } from "@/lib/pagerduty"
-import { createAutoTicket } from "@/lib/auto-ticket"
-import { resolveCurrentOncall } from "@/lib/oncall"
-import { ackUrl } from "@/lib/alert-ack-token"
+import { ALERT_CHANNEL_ADAPTERS } from "@/lib/alert-channels"
 import type { Fl_Alert } from "@prisma/client"
 
 // Phase 7 Workstream A step 1 — match-route-and-dispatch core.
@@ -231,157 +225,62 @@ export async function dispatchOneChannel(
   escalationStep = 0,
   escalateAt: Date | null = null,
 ): Promise<void> {
-  switch (channel.type) {
-    case "slack":
-      return dispatchWebhook(alert, channel, routeId, "slack", postAlertToSlack, escalationStep, escalateAt)
-    case "teams":
-      return dispatchWebhook(alert, channel, routeId, "teams", postAlertToTeams, escalationStep, escalateAt)
-    case "email":
-      return dispatchEmail(alert, channel, routeId, escalationStep, escalateAt)
-    case "sms":
-      return dispatchSms(alert, channel, routeId, escalationStep, escalateAt)
-    case "pagerduty":
-      return dispatchPagerDuty(alert, channel, routeId, escalationStep, escalateAt)
-    case "ticket":
-      return dispatchTicket(alert, routeId, escalationStep, escalateAt)
-    default:
-      // (no remaining unimplemented channel types as of step 7.)
+  // Phase 8 Workstream C §5.2 — registry-driven. The six per-channel
+  // functions that used to live in this file now live in
+  // lib/alert-channels/*.ts; the contract is preflight → send →
+  // throw-on-failure. Adding a new channel is one new file plus
+  // one entry in the registry.
+  const adapter = ALERT_CHANNEL_ADAPTERS[channel.type]
+  if (!adapter) {
+    await prisma.fl_AlertDispatch.create({
+      data: {
+        alertId: alert.id,
+        routeId,
+        channel: channel.type,
+        destination: "—",
+        state: "skipped-no-channel",
+        escalationStep,
+        escalateAt,
+        errorReason: `channel type "${channel.type}" has no adapter registered`,
+      },
+    })
+    return
+  }
+
+  // Synchronous preflight — for adapters that can short-circuit
+  // without a network/DB round-trip (Slack/Teams/PagerDuty
+  // missing-config cases).
+  if (adapter.preflight) {
+    const reason = adapter.preflight(channel)
+    if (reason) {
       await prisma.fl_AlertDispatch.create({
         data: {
           alertId: alert.id,
           routeId,
           channel: channel.type,
           destination: "—",
-          state: "skipped-no-channel",
-          escalationStep,
-          escalateAt,
-          errorReason: `channel type "${channel.type}" not yet implemented (Phase 7 WS-A)`,
-        },
-      })
-      return
-  }
-}
-
-async function dispatchWebhook(
-  alert: Fl_Alert,
-  channel: ChannelConfig,
-  routeId: string | null,
-  label: "slack" | "teams",
-  poster: (url: string, alert: Fl_Alert) => Promise<void>,
-  escalationStep: number,
-  escalateAt: Date | null,
-): Promise<void> {
-  const url = (channel.webhookUrl ?? "").trim()
-  if (!url) {
-    await prisma.fl_AlertDispatch.create({
-      data: {
-        alertId: alert.id,
-        routeId,
-        channel: label,
-        destination: "—",
-        state: "failed",
-        escalationStep,
-        escalateAt,
-        errorReason: "no webhookUrl configured",
-      },
-    })
-    return
-  }
-  const fingerprint = url.slice(0, 32) + "…"
-  try {
-    await poster(url, alert)
-    await prisma.fl_AlertDispatch.create({
-      data: {
-        alertId: alert.id,
-        routeId,
-        channel: label,
-        destination: fingerprint,
-        state: "sent",
-        escalationStep,
-        escalateAt,
-      },
-    })
-  } catch (err) {
-    await prisma.fl_AlertDispatch.create({
-      data: {
-        alertId: alert.id,
-        routeId,
-        channel: label,
-        destination: fingerprint,
-        state: "failed",
-        escalationStep,
-        escalateAt,
-        errorReason: (err as Error).message.slice(0, 500),
-      },
-    })
-  }
-}
-
-async function dispatchEmail(
-  alert: Fl_Alert,
-  channel: ChannelConfig,
-  routeId: string | null,
-  escalationStep: number,
-  escalateAt: Date | null,
-): Promise<void> {
-  let to: string[] = []
-  let oncallSuffix = ""
-  if (typeof channel.oncallScheduleId === "string" && channel.oncallScheduleId.trim()) {
-    const resolved = await resolveCurrentOncall(channel.oncallScheduleId.trim())
-    if (!resolved) {
-      await prisma.fl_AlertDispatch.create({
-        data: {
-          alertId: alert.id,
-          routeId,
-          channel: "email",
-          destination: "—",
           state: "failed",
           escalationStep,
           escalateAt,
-          errorReason: "on-call resolver returned no user (inactive schedule / unscheduled time / inactive user)",
+          errorReason: reason,
         },
       })
       return
     }
-    to = [resolved.user.email]
-    oncallSuffix = ` (on-call${resolved.fromOverride ? " override" : ""})`
-  } else {
-    to = Array.isArray(channel.toEmails) ? channel.toEmails.filter((s) => typeof s === "string" && s.trim()) : []
   }
-  if (to.length === 0) {
-    await prisma.fl_AlertDispatch.create({
-      data: {
-        alertId: alert.id,
-        routeId,
-        channel: "email",
-        destination: "—",
-        state: "failed",
-        escalationStep,
-        escalateAt,
-        errorReason: "no toEmails configured",
-      },
-    })
-    return
-  }
-  const cc = Array.isArray(channel.ccEmails) ? channel.ccEmails.filter((s) => typeof s === "string" && s.trim()) : []
-  // Privacy-respecting destination fingerprint: recipient count + first
-  // address's domain. Never the raw addresses (audit log is searchable).
-  const firstDomain = to[0].split("@")[1] ?? "—"
-  const fingerprint = `${to.length} recipient${to.length === 1 ? "" : "s"} @ ${firstDomain}${oncallSuffix}`
-  const sev = alert.severity.toUpperCase()
-  const subject = `[FleetHub ${sev}] ${alert.clientName} — ${alert.title}`
-  const htmlBody = buildAlertEmailHtml(alert)
+
   try {
-    await sendAlertEmail({ to, cc, subject, htmlBody })
+    const result = await adapter.send(alert, channel)
     await prisma.fl_AlertDispatch.create({
       data: {
         alertId: alert.id,
         routeId,
-        channel: "email",
-        destination: fingerprint,
+        channel: channel.type,
+        destination: result.destination,
         state: "sent",
         escalationStep,
         escalateAt,
+        externalId: result.externalId,
       },
     })
   } catch (err) {
@@ -389,8 +288,8 @@ async function dispatchEmail(
       data: {
         alertId: alert.id,
         routeId,
-        channel: "email",
-        destination: fingerprint,
+        channel: channel.type,
+        destination: "—",
         state: "failed",
         escalationStep,
         escalateAt,
@@ -400,224 +299,6 @@ async function dispatchEmail(
   }
 }
 
-async function dispatchSms(
-  alert: Fl_Alert,
-  channel: ChannelConfig,
-  routeId: string | null,
-  escalationStep: number,
-  escalateAt: Date | null,
-): Promise<void> {
-  let numbers: string[] = []
-  let oncallSuffix = ""
-  if (typeof channel.oncallScheduleId === "string" && channel.oncallScheduleId.trim()) {
-    const resolved = await resolveCurrentOncall(channel.oncallScheduleId.trim())
-    if (!resolved) {
-      await prisma.fl_AlertDispatch.create({
-        data: {
-          alertId: alert.id,
-          routeId,
-          channel: "sms",
-          destination: "—",
-          state: "failed",
-          escalationStep,
-          escalateAt,
-          errorReason: "on-call resolver returned no user (inactive schedule / unscheduled time / inactive user)",
-        },
-      })
-      return
-    }
-    if (!resolved.user.phoneE164) {
-      await prisma.fl_AlertDispatch.create({
-        data: {
-          alertId: alert.id,
-          routeId,
-          channel: "sms",
-          destination: "—",
-          state: "failed",
-          escalationStep,
-          escalateAt,
-          errorReason: `on-call user "${resolved.user.email}" has no phoneE164 set`,
-        },
-      })
-      return
-    }
-    numbers = [resolved.user.phoneE164]
-    oncallSuffix = ` (on-call${resolved.fromOverride ? " override" : ""})`
-  } else {
-    numbers = Array.isArray(channel.phoneNumbers)
-      ? channel.phoneNumbers.filter((s): s is string => typeof s === "string" && s.trim() !== "")
-      : []
-  }
-  if (numbers.length === 0) {
-    await prisma.fl_AlertDispatch.create({
-      data: {
-        alertId: alert.id,
-        routeId,
-        channel: "sms",
-        destination: "—",
-        state: "failed",
-        escalationStep,
-        escalateAt,
-        errorReason: "no phoneNumbers configured",
-      },
-    })
-    return
-  }
-  // Privacy-respecting fingerprint: recipient count + last-4 of
-  // first number. Never the raw E.164 in the audit chain.
-  const fingerprint = `${numbers.length} SMS · ${redactPhone(numbers[0])}${oncallSuffix}`
-  try {
-    await sendAlertSms(numbers, {
-      id: alert.id,
-      clientName: alert.clientName,
-      kind: alert.kind,
-      severity: alert.severity,
-      title: alert.title,
-    })
-    await prisma.fl_AlertDispatch.create({
-      data: {
-        alertId: alert.id,
-        routeId,
-        channel: "sms",
-        destination: fingerprint,
-        state: "sent",
-        escalationStep,
-        escalateAt,
-      },
-    })
-  } catch (err) {
-    await prisma.fl_AlertDispatch.create({
-      data: {
-        alertId: alert.id,
-        routeId,
-        channel: "sms",
-        destination: fingerprint,
-        state: "failed",
-        escalationStep,
-        escalateAt,
-        errorReason: (err as Error).message.slice(0, 500),
-      },
-    })
-  }
-}
-
-async function dispatchPagerDuty(
-  alert: Fl_Alert,
-  channel: ChannelConfig,
-  routeId: string | null,
-  escalationStep: number,
-  escalateAt: Date | null,
-): Promise<void> {
-  const key = typeof channel.integrationKey === "string" ? channel.integrationKey.trim() : ""
-  if (!key) {
-    await prisma.fl_AlertDispatch.create({
-      data: {
-        alertId: alert.id,
-        routeId,
-        channel: "pagerduty",
-        destination: "—",
-        state: "failed",
-        escalationStep,
-        escalateAt,
-        errorReason: "no integrationKey configured",
-      },
-    })
-    return
-  }
-  const fingerprint = `pd ${redactPdKey(key)}`
-  try {
-    const { dedupKey } = await sendAlertToPagerDuty(key, {
-      id: alert.id,
-      clientName: alert.clientName,
-      deviceId: alert.deviceId,
-      kind: alert.kind,
-      severity: alert.severity,
-      title: alert.title,
-    })
-    await prisma.fl_AlertDispatch.create({
-      data: {
-        alertId: alert.id,
-        routeId,
-        channel: "pagerduty",
-        destination: fingerprint,
-        state: "sent",
-        escalationStep,
-        escalateAt,
-        externalId: dedupKey,
-      },
-    })
-  } catch (err) {
-    await prisma.fl_AlertDispatch.create({
-      data: {
-        alertId: alert.id,
-        routeId,
-        channel: "pagerduty",
-        destination: fingerprint,
-        state: "failed",
-        escalationStep,
-        escalateAt,
-        errorReason: (err as Error).message.slice(0, 500),
-      },
-    })
-  }
-}
-
-async function dispatchTicket(
-  alert: Fl_Alert,
-  routeId: string | null,
-  escalationStep: number,
-  escalateAt: Date | null,
-): Promise<void> {
-  // Ticket channel has no per-route configuration in v1; the TH
-  // side decides board + priority from severity + kind. (Adding
-  // a board override is a clean follow-up if operators ask.)
-  // Resolve the device's hostname for context — saves the TH
-  // ticket reader a cross-app round-trip.
-  let hostname: string | null = null
-  if (alert.deviceId) {
-    const d = await prisma.fl_Device.findUnique({
-      where: { id: alert.deviceId },
-      select: { hostname: true },
-    })
-    hostname = d?.hostname ?? null
-  }
-  try {
-    const ticket = await createAutoTicket({
-      alertId: alert.id,
-      clientName: alert.clientName,
-      deviceId: alert.deviceId,
-      hostname,
-      kind: alert.kind,
-      severity: alert.severity,
-      title: alert.title,
-    })
-    await prisma.fl_AlertDispatch.create({
-      data: {
-        alertId: alert.id,
-        routeId,
-        channel: "ticket",
-        destination: `TH #${ticket.ticketNumber}${ticket.created ? "" : " (existing)"}`,
-        state: "sent",
-        escalationStep,
-        escalateAt,
-        externalId: ticket.ticketId,
-      },
-    })
-  } catch (err) {
-    await prisma.fl_AlertDispatch.create({
-      data: {
-        alertId: alert.id,
-        routeId,
-        channel: "ticket",
-        destination: "—",
-        state: "failed",
-        escalationStep,
-        escalateAt,
-        errorReason: (err as Error).message.slice(0, 500),
-      },
-    })
-  }
-}
 
 /**
  * Mark an alert acked + cascade to its open dispatches. Used by
@@ -737,39 +418,6 @@ export function parseEscalationChain(json: string | null): EscalationStep[] {
   }
 }
 
-function buildAlertEmailHtml(alert: Fl_Alert): string {
-  const base = (process.env.FLEETHUB_PUBLIC_URL?.trim() || "https://fleethub.pcc2k.com").replace(/\/$/, "")
-  const sev = alert.severity.toUpperCase()
-  const sevColor =
-    alert.severity === "critical" ? "#B91C1C"
-      : alert.severity === "warn" ? "#B45309"
-      : "#0B6E99"
-  const link = `${base}/alerts/${alert.id}`
-  const deviceLink = alert.deviceId ? `${base}/devices/${alert.deviceId}` : null
-  const ack = ackUrl(alert.id)
-  return `<!doctype html><html><body style="font-family:Helvetica,Arial,sans-serif;color:#0F172A;font-size:14px;line-height:1.5;">
-<p><span style="background:${sevColor};color:#fff;padding:2px 8px;border-radius:4px;font-weight:600;letter-spacing:0.05em;">${esc(sev)}</span>
-&nbsp;<strong>${esc(alert.clientName)}</strong></p>
-<p style="font-size:16px;margin:8px 0;"><strong>${esc(alert.title)}</strong></p>
-<table cellpadding="0" cellspacing="0" style="font-size:13px;color:#64748B;">
-<tr><td style="padding-right:16px;">Kind</td><td><code style="font-family:ui-monospace,SFMono-Regular,monospace;color:#0F172A;">${esc(alert.kind)}</code></td></tr>
-<tr><td style="padding-right:16px;padding-top:4px;">Device</td><td style="padding-top:4px;">${deviceLink ? `<a href="${deviceLink}" style="color:#F97316;">view in FleetHub</a>` : "—"}</td></tr>
-</table>
-<p style="margin-top:20px;">
-<a href="${ack}" style="background:#15803D;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:600;margin-right:8px;">Ack alert</a>
-<a href="${link}" style="background:${sevColor};color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:600;">Open in FleetHub</a>
-</p>
-<p style="font-size:11px;color:#94A3B8;margin-top:24px;">Clicking <em>Ack</em> stops the escalation chain. Anyone with this email can ack.</p>
-</body></html>`
-}
-
-function esc(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-}
 
 /** Public for testing + reuse from Workstream B (runbooks share the predicate). */
 export function matchesAlert(predicate: MatchPredicate, alert: Fl_Alert): boolean {
