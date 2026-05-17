@@ -1,3 +1,4 @@
+import { hmacBase64, hmacHex, safeEqualBase64, safeEqualHex } from "../hmac"
 import type { Mapper, MapperContext } from "./types"
 import { IgnoredEvent } from "./types"
 
@@ -43,6 +44,22 @@ interface Config {
   errorSeverity?: "critical" | "warn" | "info"
   /// Override severity for warning alert_type. Default "warn".
   warningSeverity?: "critical" | "warn" | "info"
+  /// HMAC-SHA256 of the raw request body. When set, requests must
+  /// carry a matching signature header. Datadog's basic Webhooks
+  /// integration doesn't sign by default — operators add a custom
+  /// header from the Datadog side via the integration's "Custom
+  /// Headers" field, computing the signature themselves (or via a
+  /// Datadog Workflow). This is the secret used for both sides.
+  hmacSecret?: string
+  /// Header name to read the signature from (lowercased). Default
+  /// "x-datadog-signature".
+  hmacHeader?: string
+  /// Encoding of the signature in the header. Hex is the more common
+  /// MSP convention; base64 is what Datadog Workflows emit. Default "hex".
+  hmacEncoding?: "hex" | "base64"
+  /// Optional prefix to strip from the header value before comparing
+  /// (e.g. "sha256="). Default empty.
+  hmacPrefix?: string
 }
 
 const SEVERITY_MAP: Record<string, "critical" | "warn" | "info"> = {
@@ -54,11 +71,34 @@ const SEVERITY_MAP: Record<string, "critical" | "warn" | "info"> = {
 }
 
 export const datadogMapper: Mapper = async (ctx: MapperContext) => {
+  const config = (ctx.config ?? {}) as Config
+
+  // HMAC verification — only when a secret is configured. The
+  // header name + encoding are operator-templated since Datadog
+  // doesn't sign by default; whatever they paste into the
+  // integration's Custom Headers is what we read here.
+  if (typeof config.hmacSecret === "string" && config.hmacSecret.length > 0) {
+    const headerName = (config.hmacHeader ?? "x-datadog-signature").toLowerCase()
+    const raw = ctx.headers[headerName] ?? ""
+    if (!raw) {
+      throw new Error(`missing ${headerName} header`)
+    }
+    const prefix = config.hmacPrefix ?? ""
+    const provided = prefix && raw.startsWith(prefix) ? raw.slice(prefix.length) : raw
+    const encoding = config.hmacEncoding ?? "hex"
+    const ok =
+      encoding === "base64"
+        ? safeEqualBase64(hmacBase64(ctx.rawBody, config.hmacSecret), provided)
+        : safeEqualHex(hmacHex(ctx.rawBody, config.hmacSecret), provided)
+    if (!ok) {
+      throw new Error(`${headerName} mismatch`)
+    }
+  }
+
   const p = ctx.parsedBody as DatadogPayload | null
   if (!p || typeof p !== "object") {
     throw new Error("Datadog payload must be a JSON object")
   }
-  const config = (ctx.config ?? {}) as Config
 
   // Recovery → ignored. Datadog also sends "ok" on monitor resolves
   // in some configurations; both treated the same.

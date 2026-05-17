@@ -4,7 +4,7 @@ import "server-only"
 // from `@/lib/hmac` rather than reaching for node:crypto directly,
 // so signature shape + replay-window behavior stays uniform.
 
-export { hmacHex, safeEqualHex } from "./core"
+export { hmacHex, hmacBase64, safeEqualHex, safeEqualBase64 } from "./core"
 export {
   signTimestampedBody,
   verifyTimestampedBody,
