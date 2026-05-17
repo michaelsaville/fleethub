@@ -1,5 +1,5 @@
 import "server-only"
-import { createHmac, timingSafeEqual } from "node:crypto"
+import { hmacHex, safeEqualHex } from "./hmac"
 
 // Phase 7 Workstream A step 9 — signed ack tokens for Slack /
 // Teams / email links. Holding the URL is the auth (anyone who
@@ -20,7 +20,7 @@ function secret(): string {
 }
 
 export function mintAckToken(alertId: string): string {
-  return createHmac("sha256", secret()).update(`ack:${alertId}`).digest("hex").slice(0, 32)
+  return hmacHex(`ack:${alertId}`, secret()).slice(0, 32)
 }
 
 export function verifyAckToken(alertId: string, token: string): boolean {
@@ -30,10 +30,7 @@ export function verifyAckToken(alertId: string, token: string): boolean {
   } catch {
     return false
   }
-  const eb = Buffer.from(expected, "hex")
-  const pb = Buffer.from(token, "hex")
-  if (eb.length === 0 || eb.length !== pb.length) return false
-  return timingSafeEqual(eb, pb)
+  return safeEqualHex(expected, token)
 }
 
 /** Public ack URL embedded in Slack/Teams/email payloads. */

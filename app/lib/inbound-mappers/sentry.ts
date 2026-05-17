@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto"
+import { hmacHex, safeEqualHex } from "../hmac"
 import type { Mapper, MapperContext } from "./types"
 import { IgnoredEvent } from "./types"
 
@@ -74,15 +74,8 @@ export const sentryMapper: Mapper = async (ctx: MapperContext) => {
     if (!provided) {
       throw new Error("missing sentry-hook-signature header")
     }
-    const expected = createHmac("sha256", config.hmacSecret).update(ctx.rawBody).digest("hex")
-    let expectedBuf: Buffer, providedBuf: Buffer
-    try {
-      expectedBuf = Buffer.from(expected, "hex")
-      providedBuf = Buffer.from(provided, "hex")
-    } catch {
-      throw new Error("sentry-hook-signature is not valid hex")
-    }
-    if (expectedBuf.length !== providedBuf.length || !timingSafeEqual(expectedBuf, providedBuf)) {
+    const expected = hmacHex(ctx.rawBody, config.hmacSecret)
+    if (!safeEqualHex(expected, provided)) {
       throw new Error("sentry-hook-signature mismatch")
     }
   }

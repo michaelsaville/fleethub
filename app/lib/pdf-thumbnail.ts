@@ -3,7 +3,7 @@ import { spawn } from "node:child_process"
 import { promises as fs } from "node:fs"
 import path from "node:path"
 import os from "node:os"
-import crypto from "node:crypto"
+import { hmacHex, safeEqualHex } from "./hmac"
 
 // Renders the first page of a PDF to a PNG via poppler's pdftoppm. Used by
 // Phase 5 step 8 (Slack/Teams thumbnail delivery) — Slack/Teams Block Kit
@@ -88,11 +88,7 @@ function hmacSecret(): string {
 }
 
 export function thumbnailToken(reportId: string): string {
-  return crypto
-    .createHmac("sha256", hmacSecret())
-    .update(reportId)
-    .digest("hex")
-    .slice(0, 16)
+  return hmacHex(reportId, hmacSecret()).slice(0, 16)
 }
 
 export function verifyThumbnailToken(reportId: string, token: string): boolean {
@@ -103,6 +99,5 @@ export function verifyThumbnailToken(reportId: string, token: string): boolean {
   } catch {
     return false
   }
-  // timingSafeEqual requires equal-length buffers; we already checked length.
-  return crypto.timingSafeEqual(Buffer.from(token, "hex"), Buffer.from(expected, "hex"))
+  return safeEqualHex(expected, token)
 }

@@ -1,5 +1,5 @@
 import "server-only"
-import { createHmac } from "node:crypto"
+import { signTimestampedBody } from "./hmac"
 
 // Server→agent push via the WSS gateway's POST /agent/dispatch endpoint.
 // Same HMAC scheme as inbound /api/agent-ingest (`${ts}.${rawBody}` signed
@@ -37,8 +37,7 @@ export async function dispatchToAgent(opts: DispatchOptions): Promise<DispatchRe
     params: opts.params,
     ...(opts.id ? { id: opts.id } : {}),
   })
-  const ts = String(Date.now())
-  const sig = "sha256=" + createHmac("sha256", secret).update(`${ts}.${body}`).digest("hex")
+  const signed = signTimestampedBody(body, secret)
   const url = `${baseUrl.replace(/\/+$/, "")}/agent/dispatch`
 
   let res: Response
@@ -47,8 +46,8 @@ export async function dispatchToAgent(opts: DispatchOptions): Promise<DispatchRe
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-pcc2k-signature": sig,
-        "x-pcc2k-timestamp": ts,
+        "x-pcc2k-signature": signed.sigHeader,
+        "x-pcc2k-timestamp": signed.ts,
       },
       body,
     })

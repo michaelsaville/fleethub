@@ -1,5 +1,5 @@
 import "server-only"
-import { createHmac } from "node:crypto"
+import { signTimestampedBody } from "./hmac"
 
 /**
  * Outbound HMAC-signed POSTs from FleetHub → TicketHub BFF. Different
@@ -33,15 +33,14 @@ export async function callTickethubBff<T = unknown>(opts: CallOpts): Promise<T> 
   if (!baseUrl) throw new Error("TICKETHUB_BASE_URL not set on FleetHub")
 
   const rawBody = opts.body === undefined ? "" : JSON.stringify(opts.body)
-  const ts = Date.now().toString()
-  const sig = createHmac("sha256", secret).update(`${ts}.${rawBody}`).digest("hex")
+  const signed = signTimestampedBody(rawBody, secret)
 
   const res = await fetch(`${baseUrl.replace(/\/$/, "")}${opts.path}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Fl-Timestamp": ts,
-      "X-Fl-Signature": `sha256=${sig}`,
+      "X-Fl-Timestamp": signed.ts,
+      "X-Fl-Signature": signed.sigHeader,
     },
     body: rawBody,
     cache: "no-store",

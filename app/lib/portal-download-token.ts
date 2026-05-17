@@ -1,5 +1,5 @@
 import "server-only"
-import { createHmac, timingSafeEqual } from "node:crypto"
+import { hmacHex, safeEqualHex } from "./hmac"
 
 // Phase 8 Workstream D step 6.2 — short-lived signed URL for the
 // customer portal's per-report download links. Same secret as the
@@ -20,8 +20,7 @@ export function mintReportDownloadToken(
   ttlMs: number = DEFAULT_TTL_MS,
 ): { t: string; s: string } {
   const exp = String(Date.now() + ttlMs)
-  const sig = createHmac("sha256", secret).update(`${reportId}.${exp}`).digest("hex")
-  return { t: exp, s: sig }
+  return { t: exp, s: hmacHex(`${reportId}.${exp}`, secret) }
 }
 
 export type VerifyResult =
@@ -40,18 +39,8 @@ export function verifyReportDownloadToken(
   if (!Number.isFinite(expMs)) return { ok: false, reason: "invalid token timestamp", status: 401 }
   if (Date.now() > expMs) return { ok: false, reason: "token expired", status: 401 }
 
-  const expected = createHmac("sha256", secret).update(`${reportId}.${t}`).digest("hex")
-  const expectedBuf = Buffer.from(expected, "hex")
-  let providedBuf: Buffer
-  try {
-    providedBuf = Buffer.from(s, "hex")
-  } catch {
-    return { ok: false, reason: "invalid token signature", status: 401 }
-  }
-  if (expectedBuf.length !== providedBuf.length) {
-    return { ok: false, reason: "signature mismatch", status: 401 }
-  }
-  if (!timingSafeEqual(expectedBuf, providedBuf)) {
+  const expected = hmacHex(`${reportId}.${t}`, secret)
+  if (!safeEqualHex(expected, s)) {
     return { ok: false, reason: "signature mismatch", status: 401 }
   }
   return { ok: true }

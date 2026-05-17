@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { createHmac } from "node:crypto"
+import { signTimestampedBody } from "@/lib/hmac"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { verifyHmac } from "@/lib/bff-hmac"
@@ -119,10 +119,7 @@ export async function POST(req: NextRequest) {
     title,
     description: enrichedDescription,
   })
-  const ts = Date.now().toString()
-  const sig = createHmac("sha256", process.env.PORTAL_BFF_SECRET ?? "")
-    .update(`${ts}.${thBody}`)
-    .digest("hex")
+  const signed = signTimestampedBody(thBody, process.env.PORTAL_BFF_SECRET ?? "")
 
   let thResponse: { ok: boolean; ticketId?: string; ticketNumber?: number; error?: string }
   try {
@@ -130,8 +127,8 @@ export async function POST(req: NextRequest) {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-portal-timestamp": ts,
-        "x-portal-signature": `sha256=${sig}`,
+        "x-portal-timestamp": signed.ts,
+        "x-portal-signature": signed.sigHeader,
       },
       body: thBody,
       cache: "no-store",
