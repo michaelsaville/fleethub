@@ -114,7 +114,7 @@ export default async function MonitorDetailPage({
 
         <Card>
           <CardHeader title="Configuration" />
-          <dl style={kvGridStyle}>
+          <dl data-mobile-stack="kv-grid" style={kvGridStyle}>
             <KV label="Tenant" value={m.tenantName ?? <span style={mutedSpan}>(all tenants)</span>} />
             <KV label="Metric" value={<code style={codeStyle}>{m.metric}</code>} />
             <KV
@@ -139,7 +139,7 @@ export default async function MonitorDetailPage({
 
         <Card>
           <CardHeader title="Status" />
-          <dl style={kvGridStyle}>
+          <dl data-mobile-stack="kv-grid" style={kvGridStyle}>
             <KV
               label="Last evaluated"
               value={m.lastEvaluatedAt

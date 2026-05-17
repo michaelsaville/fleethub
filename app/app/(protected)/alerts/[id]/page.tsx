@@ -154,6 +154,7 @@ function ActionRow({
 
   return (
     <div
+      data-mobile-stack="actions"
       style={{
         display: "flex",
         gap: "8px",

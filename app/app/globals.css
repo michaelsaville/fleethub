@@ -46,3 +46,60 @@ html, body {
 button {
   font-family: inherit;
 }
+
+/* ─── Phase 8 Workstream C §5.6 — mobile / tablet breakpoints ──────
+   Every wide table on the app uses a parent <div style="overflowX:
+   auto"> wrapper, with the table itself constrained by minWidth
+   (typically 900-1000). On small screens the wrapper already scrolls
+   horizontally, but the experience is rough — these rules smooth it
+   out + collapse the worst offenders to a stacked layout.
+
+   Targets per design doc §5.6:
+   - /msp triage table: card-per-client (deferred to a future cut;
+     v1 keeps the horizontal scroll with momentum)
+   - /alerts/[id] action row: stacks
+   - /devices/[id] KV grids: collapse to one-column
+   - /runbooks + /remote-sessions + /monitors + /setup/inbound-webhooks:
+     list tables already scroll horizontally; nothing to do
+   - Sidebar mobile drawer extends to all routes via the Phase 6
+     sidebar component (unchanged) */
+
+@media (max-width: 640px) {
+  /* Smooth out horizontal scroll on overflow-x containers — the
+     pattern used by every wide list table. */
+  [style*="overflow-x: auto"],
+  [style*="overflowX: auto"],
+  [style*="overflowX:auto"] {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  /* Action rows + button rows stack on mobile. Anywhere we use
+     `display: flex; gap` for a row of buttons (typical alert detail
+     + device detail action bars), wrap rather than overflow. */
+  [data-mobile-stack="actions"] {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+  [data-mobile-stack="actions"] > * {
+    width: 100%;
+  }
+
+  /* KV grids — the two-column "label / value" pattern on /devices/[id]
+     and on /monitors/[id]. Collapse to one column so values aren't
+     clipped or cramped. */
+  [data-mobile-stack="kv-grid"] {
+    grid-template-columns: 1fr !important;
+    row-gap: 4px !important;
+  }
+  [data-mobile-stack="kv-grid"] dt {
+    margin-top: 6px;
+  }
+
+  /* Cards lose their horizontal padding bonus on mobile so the
+     content gets the full width. */
+  section[style*="border-radius: var(--radius-md)"] {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+}

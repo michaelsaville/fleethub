@@ -295,6 +295,7 @@ function ActionBar({
   ]
   return (
     <div
+      data-mobile-stack="actions"
       style={{
         display: "flex",
         gap: "8px",
@@ -1020,6 +1021,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 function KVGrid({ pairs }: { pairs: Array<[string, string]> }) {
   return (
     <dl
+      data-mobile-stack="kv-grid"
       style={{
         margin: 0,
         display: "grid",
