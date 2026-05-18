@@ -46,7 +46,7 @@ const PAGES: PageEntry[] = [
   { label: "Clients",   hint: "Per-client fleet rollup",        href: "/clients",   icon: "🏢", keywords: ["fleet", "tenants", "managed"] },
   { label: "Devices",   hint: "Inventory and per-host detail",  href: "/devices",   icon: "💻", keywords: ["hosts", "endpoints", "inventory", "machines"] },
   { label: "Alerts",    hint: "Open and acknowledged alerts",   href: "/alerts",    icon: "🔔", keywords: ["incidents", "warnings", "critical"] },
-  { label: "Patches",   hint: "Fleet-wide patch posture",       href: "/patches",   icon: "🩹", keywords: ["updates", "kbs", "windows update"] },
+  { label: "Patches",   hint: "Fleet-wide patch posture",       href: "/patches",   icon: "🛡", keywords: ["updates", "kbs", "windows update"] },
   { label: "Scripts",   hint: "Library + signed bodies",        href: "/scripts",   icon: "⚡", keywords: ["automation", "powershell", "bash", "remediation"] },
   { label: "Software",  hint: "Installed apps + prevalence",    href: "/software",  icon: "📦", keywords: ["apps", "installs", "winget", "choco", "brew"] },
   { label: "Reports",   hint: "Compliance and lifecycle",       href: "/reports",   icon: "📊", keywords: ["compliance", "eol", "lifecycle", "pdf"] },
