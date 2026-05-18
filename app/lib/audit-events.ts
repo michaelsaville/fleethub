@@ -21,6 +21,9 @@ export interface AuditEventRow {
   detailJson: string | null
   rowHash: string | null
   prevHash: string | null
+  reviewStatus: string
+  reviewedBy: string | null
+  reviewedAt: Date | null
 }
 
 export interface AuditFilters {
@@ -32,7 +35,25 @@ export interface AuditFilters {
   /** ISO date strings (inclusive). */
   fromIso?: string
   toIso?: string
+  /** Phase 11 WS-E.5 — filter by review state. */
+  reviewStatus?: "unreviewed" | "reviewed" | "flagged"
+  /** Phase 11 WS-E.5 — preset that filters to high-risk actions
+   *  AND unreviewed state. Powers the "High-risk unreviewed" pill. */
+  highRiskUnreviewed?: boolean
 }
+
+const HIGH_RISK_ACTIONS = [
+  "approval.granted",
+  "approval.consumed",
+  "credential.disclose",
+  "credential.update",
+  "credential.seal",
+  "tenant.policy.bulk-set",
+  "crypto.key.rotated",
+  "crypto.key.bootstrapped",
+  "shell.open",
+  "mfa.locked",
+]
 
 export interface AuditListResult {
   rows: AuditEventRow[]
@@ -59,6 +80,12 @@ function buildWhere(filters: AuditFilters): Prisma.Fl_AuditLogWhereInput {
     w.createdAt = {}
     if (filters.fromIso) w.createdAt.gte = new Date(filters.fromIso)
     if (filters.toIso)   w.createdAt.lte = new Date(filters.toIso)
+  }
+  if (filters.highRiskUnreviewed) {
+    w.action = { in: HIGH_RISK_ACTIONS }
+    w.reviewStatus = "unreviewed"
+  } else if (filters.reviewStatus) {
+    w.reviewStatus = filters.reviewStatus
   }
   return w
 }
@@ -123,6 +150,9 @@ export async function listAuditEvents(
       detailJson: r.detailJson,
       rowHash: r.rowHash,
       prevHash: r.prevHash,
+      reviewStatus: r.reviewStatus,
+      reviewedBy: r.reviewedBy,
+      reviewedAt: r.reviewedAt,
     }
   })
 

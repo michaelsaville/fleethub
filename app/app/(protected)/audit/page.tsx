@@ -26,6 +26,8 @@ export default async function AuditPage({
     from?: string
     to?: string
     page?: string
+    reviewStatus?: string
+    highRisk?: string
   }>
 }) {
   const ctx = await requireSession()
@@ -54,6 +56,8 @@ export default async function AuditPage({
     deviceId: sp.device,
     fromIso: sp.from || undefined,
     toIso:   sp.to   || undefined,
+    reviewStatus: (sp.reviewStatus as "unreviewed" | "reviewed" | "flagged" | undefined) ?? undefined,
+    highRiskUnreviewed: sp.highRisk === "1",
   }
   const page = Math.max(1, Number.parseInt(sp.page ?? "1", 10) || 1)
   const result = await listAuditEvents(filters, page)
@@ -76,6 +80,7 @@ export default async function AuditPage({
         </header>
 
         <QuickRangePresets filters={filters} />
+        <ReviewPresets filters={filters} />
         <FilterBar
           filters={filters}
           actors={result.facets.actors}
@@ -262,6 +267,100 @@ function QuickRangePresets({
           style={{ fontSize: "11px", color: "var(--color-text-secondary)", textDecoration: "underline" }}
         >
           clear range
+        </Link>
+      )}
+    </div>
+  )
+}
+
+// Phase 11 WS-E.5 — review-state preset chips. "High-risk
+// unreviewed" filters to the curated high-risk action list
+// in lib/audit-events.ts AND reviewStatus='unreviewed'. The
+// other chips filter on reviewStatus alone.
+function ReviewPresets({
+  filters,
+}: {
+  filters: { actorEmail?: string; action?: string; outcome?: string; clientName?: string; deviceId?: string; fromIso?: string; reviewStatus?: string; highRiskUnreviewed?: boolean }
+}) {
+  function buildHref(extra: Record<string, string>): string {
+    const sp = new URLSearchParams()
+    if (filters.actorEmail) sp.set("actor", filters.actorEmail)
+    if (filters.action) sp.set("action", filters.action)
+    if (filters.outcome && filters.outcome !== "all") sp.set("outcome", filters.outcome)
+    if (filters.clientName) sp.set("client", filters.clientName)
+    if (filters.deviceId) sp.set("device", filters.deviceId)
+    if (filters.fromIso) sp.set("from", filters.fromIso)
+    for (const [k, v] of Object.entries(extra)) sp.set(k, v)
+    return sp.toString()
+  }
+  const chips: { label: string; href: string; active: boolean; tone: string }[] = [
+    {
+      label: "⚠ High-risk unreviewed",
+      href: `/audit?${buildHref({ highRisk: "1" })}`,
+      active: !!filters.highRiskUnreviewed,
+      tone: "danger",
+    },
+    {
+      label: "Unreviewed",
+      href: `/audit?${buildHref({ reviewStatus: "unreviewed" })}`,
+      active: filters.reviewStatus === "unreviewed" && !filters.highRiskUnreviewed,
+      tone: "warn",
+    },
+    {
+      label: "Flagged",
+      href: `/audit?${buildHref({ reviewStatus: "flagged" })}`,
+      active: filters.reviewStatus === "flagged",
+      tone: "danger",
+    },
+    {
+      label: "Reviewed",
+      href: `/audit?${buildHref({ reviewStatus: "reviewed" })}`,
+      active: filters.reviewStatus === "reviewed",
+      tone: "ok",
+    },
+  ]
+  const showClear = !!filters.highRiskUnreviewed || !!filters.reviewStatus
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+      <span style={{ fontSize: "10.5px", fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+        Review
+      </span>
+      {chips.map((c) => {
+        const bg = c.active
+          ? c.tone === "danger"
+            ? "var(--color-danger)"
+            : c.tone === "warn"
+            ? "var(--color-warning)"
+            : c.tone === "ok"
+            ? "var(--color-success)"
+            : "var(--color-accent)"
+          : "var(--color-background-tertiary)"
+        const fg = c.active ? "white" : "var(--color-text-secondary)"
+        return (
+          <Link
+            key={c.label}
+            href={c.href}
+            style={{
+              fontSize: "11px",
+              padding: "3px 9px",
+              borderRadius: 999,
+              textDecoration: "none",
+              background: bg,
+              color: fg,
+              border: c.active ? "0.5px solid transparent" : "0.5px solid var(--color-border-tertiary)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {c.label}
+          </Link>
+        )
+      })}
+      {showClear && (
+        <Link
+          href={`/audit?${buildHref({})}`}
+          style={{ fontSize: "11px", color: "var(--color-text-secondary)", textDecoration: "underline" }}
+        >
+          clear review filter
         </Link>
       )}
     </div>
