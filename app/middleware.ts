@@ -29,7 +29,7 @@ export const config = {
     /*
      * Skip:
      * - /_next/...
-     * - /api/auth/...   (next-auth handlers)
+     * - /api/auth/...   (next-auth handlers, including webauthn enroll/verify)
      * - /api/health
      * - /api/inbound/   (token-only HMAC, no session)
      * - /api/agent-ingest (HMAC bearer)
@@ -38,9 +38,11 @@ export const config = {
      * - /mfa-challenge  (the gate's destination)
      * - /login
      * - /api/auth/mfa-verify (the gate's submit target)
+     * - /account/security (Phase 11 WS-C.6 — forced-enroll target;
+     *   must be reachable without an MFA cookie so users CAN enroll)
      * Apply to everything else.
      */
-    "/((?!_next/|api/auth|api/health|api/inbound|api/agent-ingest|api/cron|api/bff|mfa-challenge|login|favicon).*)",
+    "/((?!_next/|api/auth|api/health|api/inbound|api/agent-ingest|api/cron|api/bff|mfa-challenge|login|account/security|favicon\\.ico).*)",
   ],
 }
 
@@ -72,9 +74,11 @@ export async function middleware(req: NextRequest) {
   }
 
   // Tenant enforces MFA but user hasn't enrolled — force enrollment.
+  // Phase 11 WS-C.6: redirect to self-service page, NOT the admin
+  // /setup/staff page (which is admin-only and creates a chicken-
+  // and-egg for non-admin users on forced-enroll tenants).
   if (tenantMfaRequired && !totpEnabled) {
-    const url = new URL(`/setup/staff/${(token as { id?: string }).id ?? ""}`, req.url)
-    url.searchParams.set("tab", "mfa")
+    const url = new URL("/account/security", req.url)
     url.searchParams.set("forced", "1")
     return NextResponse.redirect(url)
   }

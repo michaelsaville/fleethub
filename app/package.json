@@ -16,6 +16,8 @@
     "@auth/prisma-adapter": "^2.11.1",
     "@prisma/client": "^6.19.2",
     "@react-pdf/renderer": "^4.5.1",
+    "@simplewebauthn/browser": "^9.0.1",
+    "@simplewebauthn/server": "^9.0.3",
     "@types/jszip": "^3.4.0",
     "cron-parser": "^5.5.0",
     "dompurify": "^3.4.5",
