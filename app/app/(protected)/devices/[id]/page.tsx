@@ -12,6 +12,7 @@ import RemoteSessionLauncher from "./RemoteSessionLauncher"
 import RustdeskIdEditor from "./RustdeskIdEditor"
 import { markRemoteSessionClosed } from "../../remote-sessions/actions"
 import { Chip } from "@/components/ui/Chip"
+import NotesCard from "@/components/NotesCard"
 import { TYPOGRAPHY, TONE_PALETTE, type Tone } from "@/lib/ui-tokens"
 
 export const dynamic = "force-dynamic"
@@ -96,6 +97,21 @@ export default async function DeviceDetailPage({
     warrantyExpiresAt: Date | null
     postureReportedAt: Date | null
   }
+  // Phase 10 WS-C §5.6 — device notes (markdown, soft-delete, pinned-first).
+  const deviceNotesRaw = await prisma.fl_DeviceNote.findMany({
+    where: { deviceId: id, deletedAt: null },
+    orderBy: [{ isPinned: "desc" }, { createdAt: "desc" }],
+    take: 50,
+  })
+  const deviceNotes = deviceNotesRaw.map((n) => ({
+    id: n.id,
+    body: n.body,
+    isPinned: n.isPinned,
+    createdBy: n.createdBy,
+    createdAt: n.createdAt.toISOString(),
+    updatedAt: n.updatedAt.toISOString(),
+  }))
+
   const postureRows = await prisma.$queryRaw<PostureRow[]>`
     SELECT "backupLastSuccess", "backupLastError", "backupLastErrorMsg",
            "backupProduct", "avEngine", "avEnabled", "avSignaturesAt",
@@ -168,7 +184,7 @@ export default async function DeviceDetailPage({
           }}
         />
         <TabNav active={tab} deviceId={device.id} />
-        {tab === "summary"  && <SummaryTab device={device} alerts={alerts} linkedTickets={linkedTickets} ticketHubPublicUrl={ticketHubPublicUrl} posture={posture} />}
+        {tab === "summary"  && <SummaryTab device={device} alerts={alerts} linkedTickets={linkedTickets} ticketHubPublicUrl={ticketHubPublicUrl} posture={posture} notes={deviceNotes} canEditNotes={!!ctx} />}
         {tab === "system"   && <SystemTab device={device} />}
         {tab === "alerts"   && <AlertsTab alerts={alerts} />}
         {tab === "activity" && <ActivityFeed items={activity} title="Device activity" />}
@@ -384,12 +400,16 @@ function SummaryTab({
   linkedTickets,
   ticketHubPublicUrl,
   posture,
+  notes,
+  canEditNotes,
 }: {
   device: DeviceRow
   alerts: DeviceAlert[]
   linkedTickets: LinkedTicket[]
   ticketHubPublicUrl: string
   posture: PostureSnapshot
+  notes: Array<{ id: string; body: string; isPinned: boolean; createdBy: string; createdAt: string; updatedAt: string }>
+  canEditNotes: boolean
 }) {
   const inv = device.inventory
   const openAlerts = alerts.filter((a) => a.state === "open").slice(0, 3)
@@ -468,6 +488,8 @@ function SummaryTab({
         <Card title={`Posture${posture?.postureReportedAt ? ` · reported ${relativeLastSeen(posture.postureReportedAt)}` : ""}`}>
           <PostureBody posture={posture} />
         </Card>
+        {/* Phase 10 WS-C §5.6 — operator-authored device notes. */}
+        <NotesCard scope="device" scopeKey={device.id} notes={notes} canEdit={canEditNotes} />
         <Card title={`TicketHub tickets${openTickets.length ? ` · ${openTickets.length} open` : ""}`}>
           {linkedTickets.length === 0 ? (
             <Empty>No TicketHub tickets reference this device.</Empty>

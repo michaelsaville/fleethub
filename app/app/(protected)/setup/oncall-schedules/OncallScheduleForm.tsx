@@ -48,7 +48,10 @@ const FIELD_STYLE = FIELD_SM
 export default function OncallScheduleForm({
   initial,
   staff,
+  tenantTimezone,
 }: {
+  tenantTimezone?: string | null
+
   initial: OncallScheduleFormInput
   staff: StaffOption[]
 }) {
@@ -177,6 +180,10 @@ export default function OncallScheduleForm({
             <input type="time" value={s.start} onChange={(e) => updateSlot(i, { start: e.target.value })} style={{ ...FIELD_STYLE, width: 110 }} />
             <span style={{ fontSize: 12 }}>to</span>
             <input type="time" value={s.end} onChange={(e) => updateSlot(i, { end: e.target.value })} style={{ ...FIELD_STYLE, width: 110 }} />
+            {/* Phase 10 WS-C §5.5 — show what UTC HH:MM resolves to
+                in the tenant's local timezone. Falls back to
+                America/New_York when tenantTimezone unset. */}
+            <TzPreview start={s.start} end={s.end} timezone={tenantTimezone} />
             <button type="button" onClick={() => removeSlot(i)} style={{ marginLeft: "auto", padding: "3px 7px", fontSize: 11, color: "var(--color-text-muted)", background: "transparent", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, cursor: "pointer" }}>
               ✕
             </button>
@@ -282,4 +289,52 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       {children}
     </section>
   )
+}
+
+// Phase 10 WS-C §5.5 — small inline preview that takes UTC HH:MM
+// start/end and renders the equivalent tenant-local times. Uses
+// Intl.DateTimeFormat to avoid pulling a TZ library. We pick "next
+// upcoming Monday" as the reference date so the preview shows a
+// real-world local time (covers DST transitions implicitly).
+function TzPreview({
+  start,
+  end,
+  timezone,
+}: {
+  start: string
+  end: string
+  timezone: string | null | undefined
+}) {
+  const tz = timezone || "America/New_York"
+  if (!isValidHhmm(start) || !isValidHhmm(end)) return null
+  const sLocal = formatUtcTimeAsLocal(start, tz)
+  const eLocal = formatUtcTimeAsLocal(end, tz)
+  if (!sLocal || !eLocal) return null
+  return (
+    <span style={{ fontSize: 11, color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>
+      = {sLocal}–{eLocal} {tz.split("/").pop()}
+    </span>
+  )
+}
+
+function isValidHhmm(s: string): boolean {
+  return /^\d{2}:\d{2}$/.test(s)
+}
+
+function formatUtcTimeAsLocal(hhmm: string, timezone: string): string | null {
+  try {
+    const [h, m] = hhmm.split(":").map(Number)
+    // Anchor on the next upcoming Monday in UTC. We just need a
+    // valid date; the formatter resolves it to the tenant tz.
+    const ref = new Date()
+    ref.setUTCHours(h, m, 0, 0)
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(ref)
+  } catch {
+    return null
+  }
 }

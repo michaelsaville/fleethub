@@ -75,6 +75,7 @@ export default async function AuditPage({
           <VerifyChainButton />
         </header>
 
+        <QuickRangePresets filters={filters} />
         <FilterBar
           filters={filters}
           actors={result.facets.actors}
@@ -194,6 +195,77 @@ function toLocalInput(iso?: string): string {
   if (Number.isNaN(d.getTime())) return ""
   const pad = (n: number) => n.toString().padStart(2, "0")
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+// Phase 10 WS-C §5.4 — quick-range chips. Click writes ?from=… to
+// the form's URL + auto-submits; preserves existing actor/action/
+// outcome/client/device filters so the operator stays in flow.
+function QuickRangePresets({
+  filters,
+}: {
+  filters: { actorEmail?: string; action?: string; outcome?: string; clientName?: string; deviceId?: string; fromIso?: string }
+}) {
+  const presets = [
+    { label: "Last 1h", deltaMs: 60 * 60_000 },
+    { label: "Last 24h", deltaMs: 24 * 60 * 60_000 },
+    { label: "Last 7d", deltaMs: 7 * 24 * 60 * 60_000 },
+    { label: "Last 30d", deltaMs: 30 * 24 * 60 * 60_000 },
+  ]
+  function preserveQs(extra: Record<string, string>): string {
+    const sp = new URLSearchParams()
+    if (filters.actorEmail) sp.set("actor", filters.actorEmail)
+    if (filters.action) sp.set("action", filters.action)
+    if (filters.outcome && filters.outcome !== "all") sp.set("outcome", filters.outcome)
+    if (filters.clientName) sp.set("client", filters.clientName)
+    if (filters.deviceId) sp.set("device", filters.deviceId)
+    for (const [k, v] of Object.entries(extra)) sp.set(k, v)
+    return sp.toString()
+  }
+  // Server-rendered "now" — the chip's from value reflects the SSR
+  // moment, not browser time, which is fine for an audit log.
+  const now = new Date()
+  const activeFromIso = filters.fromIso ?? null
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
+      <span style={{ fontSize: "10.5px", fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+        Quick range
+      </span>
+      {presets.map((p) => {
+        const fromIso = new Date(now.getTime() - p.deltaMs).toISOString()
+        // Active when the from-iso is within 1 minute of this preset's from
+        // (handles SSR clock drift between renders).
+        const active =
+          activeFromIso != null &&
+          Math.abs(new Date(activeFromIso).getTime() - new Date(fromIso).getTime()) < 60_000
+        return (
+          <Link
+            key={p.label}
+            href={`/audit?${preserveQs({ from: fromIso })}`}
+            style={{
+              fontSize: "11px",
+              padding: "3px 9px",
+              borderRadius: 999,
+              textDecoration: "none",
+              background: active ? "var(--color-accent)" : "var(--color-background-tertiary)",
+              color: active ? "white" : "var(--color-text-secondary)",
+              border: active ? "0.5px solid var(--color-accent)" : "0.5px solid var(--color-border-tertiary)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {p.label}
+          </Link>
+        )
+      })}
+      {filters.fromIso && (
+        <Link
+          href={`/audit?${preserveQs({})}`}
+          style={{ fontSize: "11px", color: "var(--color-text-secondary)", textDecoration: "underline" }}
+        >
+          clear range
+        </Link>
+      )}
+    </div>
+  )
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
