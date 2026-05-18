@@ -12,6 +12,18 @@ interface State {
   remoteRequiresJustification: boolean
   portalEnabled: boolean
   portalReportMaxAgeDays: number
+  // Phase 10 WS-A §3.4 — Phase 9 + Phase 10 toggles surfaced.
+  mfaRequired: boolean
+  psaSyncEnabled: boolean
+  backupTriggerEnabled: boolean
+  backupTriggerRequiresJustification: boolean
+  shellSessionsEnabled: boolean
+  shellRequiresJustification: boolean
+  shellMaxDurationMin: number
+  fileTransferEnabled: boolean
+  fileTransferRequiresJustification: boolean
+  fileTransferMaxSizeMb: number
+  timezone: string | null
 }
 
 export default function TenantSettingsTab({
@@ -98,12 +110,154 @@ export default function TenantSettingsTab({
         </div>
       </Group>
 
+      <Group title="Security (Phase 9 + 10)">
+        <Toggle
+          label="Require MFA for sign-in"
+          hint="When on, every user on this tenant must complete TOTP challenge after Azure AD. Users without enrollment are redirected to /setup/staff/[id]?tab=mfa on next login."
+          checked={state.mfaRequired}
+          onChange={(v) => patch({ mfaRequired: v })}
+        />
+      </Group>
+
+      <Group title="Mutable backup (Phase 9 WS-C §5.4)">
+        <Toggle
+          label="Backup trigger enabled"
+          hint="When on, ADMIN can manually trigger the agent's per-product backup binary from /devices/[id]."
+          checked={state.backupTriggerEnabled}
+          onChange={(v) => patch({ backupTriggerEnabled: v })}
+        />
+        <Toggle
+          label="Justification required"
+          hint="When on, the trigger modal forces a non-empty reason field. Audit-row captures it."
+          checked={state.backupTriggerRequiresJustification}
+          onChange={(v) => patch({ backupTriggerRequiresJustification: v })}
+        />
+      </Group>
+
+      <Group title="Interactive shell (Phase 9 WS-D §6.1)">
+        <Toggle
+          label="Shell sessions enabled"
+          hint="When on, ADMIN can open an interactive shell on any host in this tenant from /devices/[id]?tab=remote."
+          checked={state.shellSessionsEnabled}
+          onChange={(v) => patch({ shellSessionsEnabled: v })}
+        />
+        <Toggle
+          label="Justification required"
+          hint="When on, the operator must enter a ≥4-char reason to open a session."
+          checked={state.shellRequiresJustification}
+          onChange={(v) => patch({ shellRequiresJustification: v })}
+        />
+        <NumberInput
+          label="Max duration (min)"
+          value={state.shellMaxDurationMin}
+          min={1}
+          max={1440}
+          onChange={(v) => setState((s) => ({ ...s, shellMaxDurationMin: v }))}
+          onBlur={() => patch({ shellMaxDurationMin: state.shellMaxDurationMin })}
+          hint="The watcher cron auto-closes sessions older than this. Default 60."
+        />
+      </Group>
+
+      <Group title="File transfer (Phase 9 WS-D §6.2)">
+        <Toggle
+          label="File transfer enabled"
+          hint="When on, ADMIN can push files to or pull files from devices in this tenant."
+          checked={state.fileTransferEnabled}
+          onChange={(v) => patch({ fileTransferEnabled: v })}
+        />
+        <Toggle
+          label="Justification required"
+          hint="Same shape as the shell-sessions toggle."
+          checked={state.fileTransferRequiresJustification}
+          onChange={(v) => patch({ fileTransferRequiresJustification: v })}
+        />
+        <NumberInput
+          label="Max file size (MB)"
+          value={state.fileTransferMaxSizeMb}
+          min={1}
+          max={10240}
+          onChange={(v) => setState((s) => ({ ...s, fileTransferMaxSizeMb: v }))}
+          onBlur={() => patch({ fileTransferMaxSizeMb: state.fileTransferMaxSizeMb })}
+          hint="Server-side validates per transfer. Default 100."
+        />
+      </Group>
+
+      <Group title="Integrations (Phase 9 WS-C §5.3 + Phase 10 §5.5)">
+        <Toggle
+          label="PSA sync enabled"
+          hint="When on, the daily 03:00 UTC cron writes active-device count into matching TicketHub TH_ContractRecurringItem.quantity for contracts tagged syncSource=fleethub-endpoint-count."
+          checked={state.psaSyncEnabled}
+          onChange={(v) => patch({ psaSyncEnabled: v })}
+        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <Label>Timezone (IANA name)</Label>
+          <input
+            type="text"
+            value={state.timezone ?? ""}
+            placeholder="America/New_York"
+            onChange={(e) => setState((s) => ({ ...s, timezone: e.target.value || null }))}
+            onBlur={() => patch({ timezone: state.timezone })}
+            style={{
+              padding: "6px 9px",
+              fontSize: 13,
+              width: 240,
+              background: "var(--color-background-primary, #fff)",
+              color: "var(--color-text-primary)",
+              border: "0.5px solid var(--color-border-secondary, #d4d4d8)",
+              borderRadius: 6,
+              outline: "none",
+              fontFamily: "ui-monospace, SFMono-Regular, monospace",
+            }}
+          />
+          <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+            Used by on-call schedule TZ preview + future scheduling. Leave blank to fall back to America/New_York.
+          </span>
+        </div>
+      </Group>
+
       <div style={{ fontSize: 11.5, color: "var(--color-text-muted)" }}>
         {saving === "saving" && <span>saving…</span>}
         {saving === "saved" && <span style={{ color: "var(--color-success)" }}>saved</span>}
         {saving === "error" && err && <span style={{ color: "var(--color-danger)" }}>{err}</span>}
       </div>
     </section>
+  )
+}
+
+function NumberInput({
+  label, hint, value, min, max, onChange, onBlur,
+}: {
+  label: string
+  hint: string
+  value: number
+  min: number
+  max: number
+  onChange: (v: number) => void
+  onBlur: () => void
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <Label>{label}</Label>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        onBlur={onBlur}
+        style={{
+          padding: "6px 9px",
+          fontSize: 13,
+          width: 120,
+          background: "var(--color-background-primary, #fff)",
+          color: "var(--color-text-primary)",
+          border: "0.5px solid var(--color-border-secondary, #d4d4d8)",
+          borderRadius: 6,
+          outline: "none",
+        }}
+      />
+      <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{hint}</span>
+    </div>
   )
 }
 
