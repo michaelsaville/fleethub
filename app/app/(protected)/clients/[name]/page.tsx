@@ -10,6 +10,7 @@ import { getClient, getClientActivity } from "@/lib/clients"
 import { listDevices } from "@/lib/devices"
 import { prisma } from "@/lib/prisma"
 import { relativeLastSeen } from "@/lib/devices-time"
+import { formatPurchaseDate, isRealPurchaseDate } from "@/lib/format-inventory"
 import type { AlertRow } from "@/lib/alerts"
 import type { DeviceRow } from "@/lib/devices"
 import BrandingTab from "./BrandingTab"
@@ -273,7 +274,7 @@ function SummaryTab({ devices, alerts }: { devices: DeviceRow[]; alerts: AlertRo
   const offline = devices.filter((d) => !d.isOnline)
   const openAlerts = alerts.filter((a) => a.state === "open").slice(0, 5)
   const oldest = [...devices]
-    .filter((d) => d.inventory?.hardware.purchaseDate)
+    .filter((d) => isRealPurchaseDate(d.inventory?.hardware.purchaseDate))
     .sort((a, b) => (a.inventory!.hardware.purchaseDate.localeCompare(b.inventory!.hardware.purchaseDate)))
     .slice(0, 3)
 
@@ -342,7 +343,7 @@ function SummaryTab({ devices, alerts }: { devices: DeviceRow[]; alerts: AlertRo
                     {d.inventory!.hardware.model}
                   </Link>
                   <span style={{ fontSize: "11px", color: "var(--color-text-muted)" }}>
-                    {d.inventory!.hardware.purchaseDate}
+                    {formatPurchaseDate(d.inventory!.hardware.purchaseDate)}
                   </span>
                 </li>
               ))}

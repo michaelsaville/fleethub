@@ -3,6 +3,7 @@ import { listAlerts } from "@/lib/alerts"
 import { listClients } from "@/lib/clients"
 import { listDevices, mockMode } from "@/lib/devices"
 import type { DeviceRow } from "@/lib/devices"
+import { isRealPurchaseDate } from "@/lib/format-inventory"
 
 /**
  * Cross-cut reporting helpers — derive the Phase 5 reports from
@@ -139,7 +140,7 @@ export async function getLifecycle(limit = 10): Promise<LifecycleRow[]> {
   const { rows: devices } = await listDevices()
   const now = new Date()
   const rows = devices
-    .filter((d) => d.inventory?.hardware.purchaseDate)
+    .filter((d) => isRealPurchaseDate(d.inventory?.hardware.purchaseDate))
     .map((d) => {
       const purchased = new Date(d.inventory!.hardware.purchaseDate)
       const ms = now.getTime() - purchased.getTime()

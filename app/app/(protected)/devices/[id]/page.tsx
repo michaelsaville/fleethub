@@ -11,6 +11,12 @@ import { getSessionContext } from "@/lib/authz"
 import RemoteSessionLauncher from "./RemoteSessionLauncher"
 import RustdeskIdEditor from "./RustdeskIdEditor"
 import FriendlyNameEditor from "@/components/FriendlyNameEditor"
+import {
+  formatGb,
+  formatDisk,
+  formatPurchaseDate,
+  normalizeSoftwareName,
+} from "@/lib/format-inventory"
 import { markRemoteSessionClosed } from "../../remote-sessions/actions"
 import { Chip } from "@/components/ui/Chip"
 import NotesCard from "@/components/NotesCard"
@@ -461,11 +467,11 @@ function SummaryTab({
             <KVGrid pairs={[
               ["Make / Model", `${inv.hardware.manufacturer} · ${inv.hardware.model}`],
               ["CPU",          inv.hardware.cpu],
-              ["RAM",          `${inv.hardware.ramGb} GB`],
-              ["Disk",         `${inv.hardware.diskFreeGb} GB free of ${inv.hardware.diskGb} GB`],
+              ["RAM",          formatGb(inv.hardware.ramGb)],
+              ["Disk",         formatDisk(inv.hardware.diskFreeGb, inv.hardware.diskGb)],
               ["Serial",       inv.hardware.serial],
               ["BIOS",         `${inv.hardware.biosVersion} (${inv.hardware.biosDate})`],
-              ["Purchased",    inv.hardware.purchaseDate],
+              ["Purchased",    formatPurchaseDate(inv.hardware.purchaseDate)],
             ]} />
           ) : <Empty>No hardware data.</Empty>}
         </Card>
@@ -589,12 +595,12 @@ function SystemTab({ device }: { device: DeviceRow }) {
           ["Model",          inv.hardware.model],
           ["Serial number",  inv.hardware.serial],
           ["CPU",            inv.hardware.cpu],
-          ["RAM",            `${inv.hardware.ramGb} GB`],
-          ["Disk total",     `${inv.hardware.diskGb} GB`],
-          ["Disk free",      `${inv.hardware.diskFreeGb} GB`],
+          ["RAM",            formatGb(inv.hardware.ramGb)],
+          ["Disk total",     formatGb(inv.hardware.diskGb)],
+          ["Disk free",      formatGb(inv.hardware.diskFreeGb)],
           ["BIOS version",   inv.hardware.biosVersion],
           ["BIOS date",      inv.hardware.biosDate],
-          ["Purchase date",  inv.hardware.purchaseDate],
+          ["Purchase date",  formatPurchaseDate(inv.hardware.purchaseDate)],
         ]} />
       </Card>
       <Card title="Operating system">
@@ -670,8 +676,9 @@ function SoftwareTab({
       </Card>
     )
   }
-  const enriched = inv.software.sample.map((name) => {
-    const count = fleetAppCounts.get(name) ?? 0
+  const enriched = inv.software.sample.map((rawName) => {
+    const name = normalizeSoftwareName(rawName)
+    const count = fleetAppCounts.get(rawName) ?? 0
     return { name, hostCount: count, pct: fleetSize === 0 ? 0 : Math.round((count / fleetSize) * 100) }
   })
   enriched.sort((a, b) => b.hostCount - a.hostCount || a.name.localeCompare(b.name))

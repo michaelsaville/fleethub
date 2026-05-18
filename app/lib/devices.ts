@@ -113,6 +113,12 @@ export interface DeviceRow {
   /// rows for this device. Renders as 📝 chip in /devices table so
   /// operators see "this host has context notes" before acting.
   noteCount: number
+  /// Wave C — projected onto DeviceRow so the Wave B `maintenance`
+  /// filter and the row chip can read it without a per-device query.
+  maintenanceMode: boolean
+  /// Wave C — null when the device has no enrolled agent (the
+  /// `enrolled=no` filter targets these). Stays null on mock rows.
+  agentId: string | null
   isMock: boolean
 }
 
@@ -186,6 +192,8 @@ export async function listDevices(filters: DeviceFilters = {}): Promise<DeviceLi
       inventory: parseInventory(d.inventoryJson),
       alertCount: alertByDevice.get(d.id) ?? 0,
       noteCount: notesByDevice.get(d.id) ?? 0,
+      maintenanceMode: d.maintenanceMode,
+      agentId: d.agentId,
       isMock: false,
     }))
   }
@@ -216,9 +224,10 @@ export async function listDevices(filters: DeviceFilters = {}): Promise<DeviceLi
   }
   if (filters.hasAlerts === true) rows = rows.filter((r) => r.alertCount > 0)
   if (filters.hasAlerts === false) rows = rows.filter((r) => r.alertCount === 0)
-  // maintenance + enrolled need data not on DeviceRow today. Approximate
-  // from the underlying row by fetching extras in a later iteration — for
-  // now these filter clauses are pass-through.
+  if (filters.maintenance === "on") rows = rows.filter((r) => r.maintenanceMode)
+  if (filters.maintenance === "off") rows = rows.filter((r) => !r.maintenanceMode)
+  if (filters.enrolled === "yes") rows = rows.filter((r) => r.agentId !== null)
+  if (filters.enrolled === "no") rows = rows.filter((r) => r.agentId === null)
 
   // Sort precedence: explicit sortField+sortDir > legacy sort > default
   rows.sort(sortComparatorV2(filters))
@@ -250,6 +259,8 @@ export async function getDevice(id: string): Promise<DeviceRow | null> {
     inventory: parseInventory(live.inventoryJson),
     alertCount,
     noteCount,
+    maintenanceMode: live.maintenanceMode,
+    agentId: live.agentId,
     isMock: false,
   }
 }
