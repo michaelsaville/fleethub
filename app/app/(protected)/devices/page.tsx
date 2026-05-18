@@ -7,6 +7,7 @@ import type { ViewFilters, ViewSort } from "@/lib/device-view-types"
 import { getSessionContext } from "@/lib/authz"
 import { ViewSelector } from "./ViewSelector"
 import ColumnsMenu from "./ColumnsMenu"
+import DeviceFilters from "./DeviceFilters"
 
 export const dynamic = "force-dynamic"
 
@@ -68,7 +69,7 @@ export default async function DevicesPage({
       ? { field: sp.sort as ViewSort["field"], direction: "desc" }
       : activeView?.sort ?? null
 
-  const { rows, totalBeforeFilter, isMock } = await listDevices({
+  const { rows, totalBeforeFilter, isMock, facets } = await listDevices({
     q: effectiveFilters.q,
     client: effectiveFilters.client,
     os: effectiveFilters.os as DeviceListFilterOs,
@@ -122,6 +123,8 @@ export default async function DevicesPage({
           currentSort={effectiveSort}
           isAdmin={ctx?.role === "ADMIN"}
         />
+
+        <DeviceFilters filters={effectiveFilters} facets={facets} />
 
         <DeviceTable rows={rows} hiddenColumns={hiddenColumns} />
       </div>

@@ -2,21 +2,16 @@
 
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import type { DeviceRow } from "@/lib/devices"
 import { relativeLastSeen } from "@/lib/devices-time"
 import { submitWithApproval } from "@/lib/client/submit-with-approval"
 import { StatusDot } from "@/components/ui/StatusDot"
 
 /**
- * Client-side table for /devices. Owns:
- *   - search input (debounced URL push)
- *   - row checkbox selection
- *   - sticky bulk-action bar
- *
- * Server passes pre-filtered rows (filter chips already applied via
- * URL params); search narrows further. Sort uses URL too — clicking a
- * column header rewrites `?sort=`.
+ * Client-side table for /devices. Owns row checkbox selection +
+ * sticky bulk-action bar. Search + filters live in DeviceFilters
+ * (sibling); sort uses URL via the column headers below.
  */
 export default function DeviceTable({
   rows,
@@ -37,28 +32,7 @@ export default function DeviceTable({
   }
   const router = useRouter()
   const params = useSearchParams()
-  const initialQ = params.get("q") ?? ""
-  const [q, setQ] = useState(initialQ)
   const [selected, setSelected] = useState<Set<string>>(new Set())
-
-  // Debounced URL push when search changes — keeps server-side filtering
-  // authoritative + sharable links.
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
-      const next = new URLSearchParams(params.toString())
-      if (q.trim()) next.set("q", q.trim())
-      else next.delete("q")
-      const nextStr = next.toString()
-      const currentStr = params.toString()
-      if (nextStr !== currentStr) router.replace(`/devices${nextStr ? `?${nextStr}` : ""}`)
-    }, 250)
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q])
 
   // If the row set changes (filters changed server-side), prune
   // selections that no longer exist.
@@ -114,22 +88,7 @@ export default function DeviceTable({
           flexWrap: "wrap",
         }}
       >
-        <input
-          type="search"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Search friendly name, hostname, client, IP, role…"
-          style={{
-            flex: 1,
-            minWidth: "240px",
-            padding: "7px 11px",
-            fontSize: "12px",
-            background: "var(--color-background-secondary)",
-            border: "0.5px solid var(--color-border-secondary)",
-            borderRadius: "6px",
-            color: "var(--color-text-primary)",
-          }}
-        />
+        <span style={{ flex: 1 }} />
         <span style={{ fontSize: "11px", color: "var(--color-text-muted)" }}>
           {rows.length} device{rows.length === 1 ? "" : "s"} · {onlineCount} online
         </span>
