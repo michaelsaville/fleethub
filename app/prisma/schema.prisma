@@ -1618,3 +1618,49 @@ model Fl_CryptoRotation {
   @@map("fl_crypto_rotations")
   @@schema("fleethub")
 }
+
+// ─── PHASE 13 — DEPLOY-FROM-PANEL (WS-D.0) ──────────────────────────────────
+
+/// Phase 13 WS-D.0. One-time agent bootstrap token. Operator generates
+/// from /clients/[name]?tab=install; agent consumes via
+/// POST /api/agent-ingest/enroll. 24h default TTL; 410-Gone on second
+/// use. Token is a 32-byte hex string used as the PK.
+model Fl_EnrollToken {
+  token              String    @id // 64-char hex (32 bytes)
+  tenantName         String
+  createdBy          String
+  createdAt          DateTime  @default(now())
+  expiresAt          DateTime
+  consumedAt         DateTime?
+  consumedByAgentId  String?
+  consumedFromIp     String?
+
+  @@index([tenantName, consumedAt])
+  @@index([expiresAt])
+  @@map("fl_enroll_tokens")
+  @@schema("fleethub")
+}
+
+/// Phase 13 WS-D.0. Per-agent secret + tenant binding established at
+/// bootstrap time. Replaces the shared FLEETHUB_AGENT_SECRET for hosts
+/// that enroll via the panel (the shared secret stays valid for
+/// legacy / manually-deployed agents). agentSecret is HMAC-shareable
+/// — the gateway + posture routes accept it as Bearer.
+model Fl_AgentRegistration {
+  id              String    @id @default(cuid())
+  tenantName      String
+  hostname        String?
+  os              String?
+  osVersion       String?
+  /// Bearer secret the agent presents on every call. Stored bcrypt-
+  /// hashed (the agent has the plaintext from bootstrap response).
+  agentSecretHash String
+  enrolledAt      DateTime  @default(now())
+  enrolledByToken String? // FK semantic to Fl_EnrollToken.token; nullable for manual enrollments
+  lastSeenAt      DateTime?
+  isRevoked       Boolean   @default(false)
+
+  @@index([tenantName, isRevoked])
+  @@map("fl_agent_registrations")
+  @@schema("fleethub")
+}

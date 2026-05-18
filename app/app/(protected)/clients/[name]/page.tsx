@@ -14,6 +14,7 @@ import type { AlertRow } from "@/lib/alerts"
 import type { DeviceRow } from "@/lib/devices"
 import BrandingTab from "./BrandingTab"
 import TenantSettingsTab from "./TenantSettingsTab"
+import InstallTab from "./InstallTab"
 
 export const dynamic = "force-dynamic"
 
@@ -24,6 +25,7 @@ const TABS = [
   { id: "activity", label: "Activity" },
   { id: "branding", label: "Branding" },
   { id: "settings", label: "Settings" },
+  { id: "install",  label: "Install"  },
 ] as const
 type TabId = typeof TABS[number]["id"]
 
@@ -133,6 +135,7 @@ export default async function ClientDetailPage({
             }}
           />
         )}
+        {tab === "install" && <InstallTab tenantName={name} />}
       </div>
     </AppShell>
   )
