@@ -167,6 +167,9 @@ model Fl_Device {
   shellSessions Fl_ShellSession[]
   /// Phase 9 WS-D §6.2 — file transfers to/from this device.
   fileTransfers Fl_FileTransfer[]
+  /// Phase 10 WS-C §5.6 — operator-authored markdown notes ("the
+  /// admin pw is in vault under acme-router-admin", etc.).
+  notes        Fl_DeviceNote[]
 
   @@unique([clientName, hostname])
   @@index([clientName, isOnline])
@@ -251,6 +254,10 @@ model Fl_Tenant {
   fileTransferEnabled                  Boolean @default(false)
   fileTransferRequiresJustification    Boolean @default(true)
   fileTransferMaxSizeMb                Int     @default(100)
+  /// Phase 10 WS-C §5.5 — IANA tz name for on-call schedule preview
+  /// + future scheduling features. App-level default America/New_York
+  /// when null.
+  timezone                             String?
 
   createdAt                   DateTime @default(now())
   updatedAt                   DateTime @updatedAt
@@ -1206,5 +1213,45 @@ model Fl_FileTransfer {
 
   @@index([deviceId, requestedAt(sort: Desc)])
   @@map("fl_file_transfers")
+  @@schema("fleethub")
+}
+
+// ─── PHASE 10 WS-C §5.6 — DEVICE/TENANT NOTES (KB-lite) ──────────────────
+
+/// Per-device markdown note. Sanitized via DOMPurify on the client
+/// before render. Soft-delete via deletedAt so historical notes
+/// retain context across staff turnover. Pinned notes float to the
+/// top of the device summary.
+model Fl_DeviceNote {
+  id          String    @id @default(cuid())
+  deviceId    String
+  device      Fl_Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  body        String
+  isPinned    Boolean   @default(false)
+  createdBy   String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  @@index([deviceId, deletedAt, isPinned])
+  @@map("fl_device_notes")
+  @@schema("fleethub")
+}
+
+/// Per-tenant markdown note. Same shape as Fl_DeviceNote but keyed
+/// by tenant. Used for "the router admin pw is in vault" and similar
+/// tenant-level operational context.
+model Fl_TenantNote {
+  id           String    @id @default(cuid())
+  tenantName   String
+  body         String
+  isPinned     Boolean   @default(false)
+  createdBy    String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  @@index([tenantName, deletedAt, isPinned])
+  @@map("fl_tenant_notes")
   @@schema("fleethub")
 }
