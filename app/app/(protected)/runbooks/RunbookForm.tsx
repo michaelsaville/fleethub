@@ -6,6 +6,7 @@ import { FIELD, TYPOGRAPHY, CARD } from "@/lib/ui-tokens"
 import { Button } from "@/components/ui/Button"
 import { ConfirmModal } from "@/components/ui/ConfirmModal"
 import { InlineAlert } from "@/components/ui/InlineAlert"
+import { MatchPreview } from "@/components/MatchPreview"
 
 // Phase 7 Workstream B step 3 — shared wizard for create + edit.
 // One form, four sections (Identity → Match → Script → Behavior)
@@ -157,6 +158,7 @@ export default function RunbookForm({
         <Field label="Kind glob" hint='Like "disk.*", "service.down", or "*" for any matching severity. Case-insensitive.'>
           <input type="text" value={kindLike} onChange={(e) => setKindLike(e.target.value)} placeholder="disk.*" style={{ ...FIELD, width: 320 }} />
         </Field>
+        <MatchPreview severity={severity} kindLike={kindLike} />
       </Section>
 
       <Section title="Script (what runs?)">

@@ -38,18 +38,16 @@ export default async function SetupPage() {
             disabledHint={!isAdmin ? "ADMIN-only" : undefined}
           />
           <SetupCard
-            href="#"
+            href="/clients/new"
             label="Agent enrollment"
-            status="Phase 1"
-            description="Issue enrollment tokens, view connected agents, revoke compromised hosts."
-            disabled
+            status="live"
+            description="Pre-create a client to mint an enrollment token, or open an existing client to manage tokens + connected agents."
           />
           <SetupCard
-            href="#"
+            href="/clients"
             label="Integrations"
-            status="Phase 1"
-            description="DocHub assets, TicketHub clients, Microsoft Graph for inventory."
-            disabled
+            status="per-client"
+            description="DocHub binding, TicketHub portal toggle, Scout tenant ID. Open a client and use its Settings / Branding / Scout tabs."
           />
           <SetupCard
             href="/setup/alert-routing"

@@ -6,6 +6,7 @@ import SeedBanner from "@/components/SeedBanner"
 import { getAlert, getAlertActivity } from "@/lib/alerts"
 import { getSessionContext } from "@/lib/authz"
 import { relativeLastSeen } from "@/lib/devices-time"
+import { prisma } from "@/lib/prisma"
 import { ackAlert, resolveAlert, forceEscalateAction } from "../actions"
 
 export const dynamic = "force-dynamic"
@@ -22,6 +23,48 @@ export default async function AlertDetailPage({
   const ctx = await getSessionContext()
   const isAdmin = ctx?.role === "ADMIN"
   const activity = await getAlertActivity(id)
+
+  // Phase 9 WS-A §3.7 — surface source monitor/runbook when this
+  // alert was produced by one. The kind is the discriminator:
+  // monitors emit "monitor.<sanitized-name>" or operator-overridden,
+  // runbooks emit "runbook.tripped". We resolve by emitKind / name.
+  let sourceMonitor: { id: string; name: string; severity: string; metric: string } | null = null
+  let sourceRunbook: { id: string; name: string; trippedReason: string | null } | null = null
+  if (alert.kind) {
+    sourceMonitor = await prisma.fl_Monitor
+      .findFirst({
+        where: { emitKind: alert.kind },
+        select: { id: true, name: true, severity: true, metric: true },
+      })
+      .catch(() => null)
+    if (alert.kind === "runbook.tripped" && alert.detail) {
+      try {
+        const detail = JSON.parse(alert.detail) as { runbookId?: string }
+        if (detail.runbookId) {
+          sourceRunbook = await prisma.fl_Runbook
+            .findUnique({
+              where: { id: detail.runbookId },
+              select: { id: true, name: true, trippedReason: true },
+            })
+            .catch(() => null)
+        }
+      } catch {
+        // detail not JSON; skip
+      }
+    }
+  }
+
+  // Phase 9 WS-A §3.3 — count related open/acked alerts on the same host.
+  let relatedOnHostCount = 0
+  if (alert.deviceId) {
+    relatedOnHostCount = await prisma.fl_Alert.count({
+      where: {
+        deviceId: alert.deviceId,
+        id: { not: alert.id },
+        state: { in: ["open", "ack"] },
+      },
+    })
+  }
 
   const sevColor =
     alert.severity === "critical" ? "var(--color-danger)" :
@@ -85,7 +128,11 @@ export default async function AlertDetailPage({
 
         {alert.isMock && <SeedBanner kind="device" />}
 
-        <ActionRow alert={alert} isAdmin={isAdmin} />
+        <ActionRow
+          alert={alert}
+          isAdmin={isAdmin}
+          relatedOnHostCount={alert.deviceId ? relatedOnHostCount : 0}
+        />
 
         <section data-mobile-stack="kv-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr)", gap: "16px" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -112,6 +159,17 @@ export default async function AlertDetailPage({
                                 : "—"],
                 ["Severity",  alert.severity],
                 ["State",     alert.state],
+                ...(sourceMonitor
+                  ? [["Source",
+                      <Link key="src-mon" href={`/monitors/${sourceMonitor.id}`} style={{ color: "var(--color-accent)", textDecoration: "none" }}>
+                        Monitor · {sourceMonitor.name} ({sourceMonitor.metric})
+                      </Link>] as [string, React.ReactNode]]
+                  : sourceRunbook
+                    ? [["Source",
+                        <Link key="src-rb" href={`/runbooks/${sourceRunbook.id}`} style={{ color: "var(--color-accent)", textDecoration: "none" }}>
+                          Runbook · {sourceRunbook.name}
+                        </Link>] as [string, React.ReactNode]]
+                    : []),
                 ["Fired",     alert.createdAt.toLocaleString()],
                 ["Acked by",  alert.ackedBy ?? "—"],
                 ["Acked at",  alert.ackedAt ? alert.ackedAt.toLocaleString() : "—"],
@@ -141,9 +199,11 @@ function Breadcrumb({ alertTitle }: { alertTitle: string }) {
 function ActionRow({
   alert,
   isAdmin,
+  relatedOnHostCount,
 }: {
-  alert: { id: string; state: "open" | "ack" | "resolved"; isMock: boolean }
+  alert: { id: string; state: "open" | "ack" | "resolved"; isMock: boolean; deviceId?: string | null }
   isAdmin: boolean
+  relatedOnHostCount: number
 }) {
   const canMutate = isAdmin && !alert.isMock
   const reason = !isAdmin
@@ -198,6 +258,33 @@ function ActionRow({
           Force escalate
         </button>
       </form>
+      {alert.deviceId && (
+        <>
+          <Link
+            href={`/devices/${alert.deviceId}?tab=remote`}
+            style={{ ...buttonStyle(true), background: "transparent", color: "var(--color-accent)", border: "0.5px solid var(--color-accent)", textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+            title="Open the device's remote tab — Remote in from there"
+          >
+            Remote in →
+          </Link>
+          <Link
+            href={`/scripts?host=${encodeURIComponent(alert.deviceId)}`}
+            style={{ ...buttonStyle(true), background: "transparent", color: "var(--color-text-secondary)", border: "0.5px solid var(--color-border-tertiary)", textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+            title="Pick a script to run on this host"
+          >
+            Run script…
+          </Link>
+          {relatedOnHostCount > 0 && (
+            <Link
+              href={`/alerts?deviceId=${encodeURIComponent(alert.deviceId)}&state=all`}
+              style={{ ...buttonStyle(true), background: "transparent", color: "var(--color-text-secondary)", border: "0.5px solid var(--color-border-tertiary)", textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+              title="Other open/acked alerts on this host"
+            >
+              Related on host · {relatedOnHostCount}
+            </Link>
+          )}
+        </>
+      )}
       <span style={{ flex: 1 }} />
       {!canMutate && reason && (
         <span style={{ fontSize: "11px", color: "var(--color-text-muted)", alignSelf: "center" }}>

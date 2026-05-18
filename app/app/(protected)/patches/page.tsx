@@ -4,6 +4,7 @@ import SeedBanner from "@/components/SeedBanner"
 import SeedPatchesButton from "@/components/SeedPatchesButton"
 import { Card as UICard, CardHeader } from "@/components/ui/Card"
 import { EmptyState } from "@/components/ui/EmptyState"
+import BulkApproveKevButton from "./BulkApproveKevButton"
 import { mockMode } from "@/lib/devices"
 import { getSessionContext } from "@/lib/authz"
 import {
@@ -105,9 +106,17 @@ export default async function PatchesPage({
 // ─── Vulnerable tab ─────────────────────────────────────────────────
 
 async function VulnerableTab() {
-  const [rows, summary] = await Promise.all([
+  const [rows, summary, kevNeedsApprovalCount] = await Promise.all([
     getVulnerableRows(),
     getVulnerableSummary(),
+    // Phase 9 WS-A §3.8 — count KEV closing patches in needs-approval
+    // so the bulk-approve button knows how many it would touch.
+    prisma.fl_Patch.count({
+      where: {
+        approvalState: "needs-approval",
+        isKev: true,
+      },
+    }),
   ])
 
   return (
@@ -119,6 +128,11 @@ async function VulnerableTab() {
         <Tile label="Affected devices" value={String(summary.affectedDevices)} hint="missing ≥1 patch" tone={summary.affectedDevices > 0 ? "warn" : "ok"} />
         <Tile label="Fully patched" value={String(summary.fullyPatchedDevices)} hint="across fleet" tone="ok" />
       </section>
+      {kevNeedsApprovalCount > 0 && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <BulkApproveKevButton count={kevNeedsApprovalCount} />
+        </div>
+      )}
 
       {rows.length === 0 ? (
         <Card title="Vulnerable">

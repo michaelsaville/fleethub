@@ -6,6 +6,7 @@ import { FIELD, TYPOGRAPHY, CARD } from "@/lib/ui-tokens"
 import { Button } from "@/components/ui/Button"
 import { ConfirmModal } from "@/components/ui/ConfirmModal"
 import { InlineAlert } from "@/components/ui/InlineAlert"
+import { MatchPreview } from "@/components/MatchPreview"
 
 // Phase 7 Workstream A step 3 — shared editor for create + edit.
 // No client-side state machine beyond local form state; all
@@ -242,6 +243,7 @@ export default function AlertRouteForm({
         <Field label="Kind glob" hint='Like "disk.*", "agent.disconnected", or "*" for any. Case-insensitive.'>
           <input type="text" value={kindLike} onChange={(e) => setKindLike(e.target.value)} placeholder="disk.* (optional)" style={{ ...FIELD_STYLE, width: 320 }} />
         </Field>
+        <MatchPreview severity={severity} kindLike={kindLike} />
       </Section>
 
       <Section title="Channels">
