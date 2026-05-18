@@ -60,17 +60,36 @@ export default function DeploymentForm({
   const [action, setAction] = useState<"install" | "uninstall" | "update">("install")
   const [dryRun, setDryRun] = useState(true)
   const [filter, setFilter] = useState("")
+  const [osFilter, setOsFilter] = useState<"" | "windows" | "linux" | "darwin">("")
+  const [onlineFilter, setOnlineFilter] = useState<"" | "online" | "offline">("")
+  const [roleFilter, setRoleFilter] = useState<string>("")
   const [selectedIds, setSelectedIds] = useState<string[]>(defaultTargetIds)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const tenantName = selectedPackage?.tenantName ?? ""
+  // Phase 9 WS-A §3.4 — OS / online / role chip filters above the
+  // device table. Mirrors /devices facets so the operator gets the
+  // same filter UX building a deploy as scanning the fleet.
   const filteredDevices = useMemo(() => {
     const q = filter.trim().toLowerCase()
     return devices
       .filter((d) => !tenantName || d.clientName === tenantName)
+      .filter((d) => !osFilter || d.os === osFilter)
+      .filter((d) => !onlineFilter || (onlineFilter === "online" ? d.isOnline : !d.isOnline))
+      .filter((d) => !roleFilter || d.role === roleFilter)
       .filter((d) => !q || d.hostname.toLowerCase().includes(q) || (d.role ?? "").toLowerCase().includes(q))
-  }, [devices, filter, tenantName])
+  }, [devices, filter, osFilter, onlineFilter, roleFilter, tenantName])
+
+  const roleFacets = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const d of devices) {
+      if (tenantName && d.clientName !== tenantName) continue
+      if (!d.role) continue
+      counts.set(d.role, (counts.get(d.role) ?? 0) + 1)
+    }
+    return Array.from(counts.entries()).map(([name, count]) => ({ name, count }))
+  }, [devices, tenantName])
 
   function toggle(id: string) {
     setSelectedIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
@@ -182,24 +201,53 @@ export default function DeploymentForm({
       </Card>
 
       <Card title={`Targets — ${selectedIds.length} selected`}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-          <input
-            type="search"
-            placeholder="Filter by hostname or role…"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            style={{ ...input(), flex: 1 }}
-          />
-          <button
-            type="button"
-            onClick={() => setSelectedIds(filteredDevices.map((d) => d.id))}
-            style={btnGhost()}
-          >
-            Select all ({filteredDevices.length})
-          </button>
-          <button type="button" onClick={() => setSelectedIds([])} style={btnGhost()}>
-            Clear
-          </button>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              type="search"
+              placeholder="Filter by hostname or role…"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              style={{ ...input(), flex: 1 }}
+            />
+            <button
+              type="button"
+              onClick={() => setSelectedIds(filteredDevices.map((d) => d.id))}
+              style={btnGhost()}
+            >
+              Select all ({filteredDevices.length})
+            </button>
+            <button type="button" onClick={() => setSelectedIds([])} style={btnGhost()}>
+              Clear
+            </button>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 10, fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", width: 36 }}>OS</span>
+            <FilterChip label="Any" active={!osFilter} onClick={() => setOsFilter("")} />
+            <FilterChip label="Windows" active={osFilter === "windows"} onClick={() => setOsFilter("windows")} />
+            <FilterChip label="Linux" active={osFilter === "linux"} onClick={() => setOsFilter("linux")} />
+            <FilterChip label="macOS" active={osFilter === "darwin"} onClick={() => setOsFilter("darwin")} />
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 10, fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", width: 36 }}>State</span>
+            <FilterChip label="Any" active={!onlineFilter} onClick={() => setOnlineFilter("")} />
+            <FilterChip label="Online" active={onlineFilter === "online"} onClick={() => setOnlineFilter("online")} />
+            <FilterChip label="Offline" active={onlineFilter === "offline"} onClick={() => setOnlineFilter("offline")} />
+          </div>
+          {roleFacets.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", width: 36 }}>Role</span>
+              <FilterChip label="Any" active={!roleFilter} onClick={() => setRoleFilter("")} />
+              {roleFacets.map((r) => (
+                <FilterChip
+                  key={r.name}
+                  label={`${r.name} · ${r.count}`}
+                  active={roleFilter === r.name}
+                  onClick={() => setRoleFilter(r.name)}
+                />
+              ))}
+            </div>
+          )}
         </div>
         {droppedToMaintenance > 0 && (
           <p style={{ fontSize: 11, color: "var(--color-warning)", marginBottom: 8 }}>
@@ -316,4 +364,25 @@ function th(): React.CSSProperties {
 }
 function td(): React.CSSProperties {
   return { padding: "6px 10px", color: "var(--color-text-primary)", verticalAlign: "middle" }
+}
+
+function FilterChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        padding: "3px 9px",
+        fontSize: 11,
+        borderRadius: 999,
+        background: active ? "var(--color-accent)" : "var(--color-background-tertiary)",
+        color: active ? "white" : "var(--color-text-secondary)",
+        border: active ? "0.5px solid var(--color-accent)" : "0.5px solid var(--color-border-tertiary)",
+        cursor: "pointer",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </button>
+  )
 }

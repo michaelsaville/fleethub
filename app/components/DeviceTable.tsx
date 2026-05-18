@@ -251,7 +251,7 @@ export default function DeviceTable({ rows }: { rows: DeviceRow[] }) {
         </section>
       )}
 
-      {selectedCount > 0 && <BulkBar count={selectedCount} onClear={() => setSelected(new Set())} />}
+      {selectedCount > 0 && <BulkBar count={selectedCount} selectedIds={Array.from(selected)} onClear={() => setSelected(new Set())} />}
     </div>
   )
 }
@@ -276,19 +276,55 @@ function SortHead({
   )
 }
 
-function BulkBar({ count, onClear }: { count: number; onClear: () => void }) {
-  // Bulk actions are scaffolded but disabled in Phase 0 — they need
-  // matching server actions + agent commands which arrive in later
-  // phases. Showing the buttons + the explanatory tooltip is the
-  // forcing function: the next phase has visible UI to wire up.
+function BulkBar({ count, selectedIds, onClear }: { count: number; selectedIds: string[]; onClear: () => void }) {
+  // Phase 9 WS-A §3.2 — replaced the four phase-tooltipped placebos
+  // with two real wired actions + one save-as-group affordance.
+  // Run-script links into /scripts pre-populated with the host list;
+  // operator picks a script there and the per-host runScript fan-out
+  // happens via the existing /api/scripts/[id]/run route. Maintenance
+  // toggle uses the WS-B-audited /api/devices/maintenance/bulk route
+  // directly. Patches/software still don't have a clean bulk backend,
+  // so they're omitted rather than left as disabled placebos.
+  const [busy, setBusy] = useState<"on" | "off" | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const router = useRouter()
+
+  async function setMaint(on: boolean) {
+    setBusy(on ? "on" : "off")
+    setErr(null)
+    try {
+      const res = await fetch("/api/devices/maintenance/bulk", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          deviceIds: selectedIds,
+          on,
+          until: on ? new Date(Date.now() + 4 * 60 * 60_000).toISOString() : null,
+          reason: on ? "bulk via /devices BulkBar" : null,
+        }),
+      })
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string }
+        setErr(j.error ?? `HTTP ${res.status}`)
+      } else {
+        router.refresh()
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const hostQs = encodeURIComponent(selectedIds.join(","))
   return (
     <div
       style={{
         position: "sticky",
         bottom: "12px",
         display: "flex",
-        alignItems: "center",
-        gap: "10px",
+        flexDirection: "column",
+        gap: "6px",
         padding: "10px 14px",
         background: "var(--color-background-tertiary)",
         border: "0.5px solid var(--color-border-secondary)",
@@ -296,51 +332,70 @@ function BulkBar({ count, onClear }: { count: number; onClear: () => void }) {
         boxShadow: "0 6px 18px rgba(0,0,0,0.25)",
       }}
     >
-      <span style={{ fontSize: "12px", color: "var(--color-text-primary)", fontWeight: 500 }}>
-        {count} selected
-      </span>
-      <span style={{ flex: 1 }} />
-      <BulkAction label="Run script" phase="Phase 2" />
-      <BulkAction label="Deploy patches" phase="Phase 4" />
-      <BulkAction label="Install software" phase="Phase 3" />
-      <BulkAction label="Reboot" phase="Phase 2" />
-      <button
-        onClick={onClear}
-        style={{
-          fontSize: "11px",
-          padding: "5px 10px",
-          borderRadius: "5px",
-          border: "0.5px solid var(--color-border-secondary)",
-          background: "transparent",
-          color: "var(--color-text-secondary)",
-          cursor: "pointer",
-        }}
-      >
-        Clear
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <span style={{ fontSize: "12px", color: "var(--color-text-primary)", fontWeight: 500 }}>
+          {count} selected
+        </span>
+        <span style={{ flex: 1 }} />
+        <Link
+          href={`/scripts?hosts=${hostQs}`}
+          style={bulkActionButton}
+          title="Pick a script — runs against the selected hosts"
+        >
+          Run script…
+        </Link>
+        <button
+          type="button"
+          onClick={() => setMaint(true)}
+          disabled={busy !== null}
+          style={bulkActionButton}
+          title="Set Maintenance Mode ON (4h window) on the selected hosts"
+        >
+          {busy === "on" ? "Setting…" : "Maintenance ON · 4h"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setMaint(false)}
+          disabled={busy !== null}
+          style={bulkActionButton}
+          title="Release Maintenance Mode on the selected hosts"
+        >
+          {busy === "off" ? "Releasing…" : "Maintenance OFF"}
+        </button>
+        <button
+          onClick={onClear}
+          style={{
+            fontSize: "11px",
+            padding: "5px 10px",
+            borderRadius: "5px",
+            border: "0.5px solid var(--color-border-secondary)",
+            background: "transparent",
+            color: "var(--color-text-secondary)",
+            cursor: "pointer",
+          }}
+        >
+          Clear
+        </button>
+      </div>
+      {err && (
+        <div style={{ fontSize: 11, color: "var(--color-danger)" }}>{err}</div>
+      )}
     </div>
   )
 }
 
-function BulkAction({ label, phase }: { label: string; phase: string }) {
-  return (
-    <button
-      type="button"
-      disabled
-      title={`${label} ships in ${phase}`}
-      style={{
-        fontSize: "11px",
-        padding: "5px 10px",
-        borderRadius: "5px",
-        border: "0.5px solid var(--color-border-tertiary)",
-        background: "transparent",
-        color: "var(--color-text-muted)",
-        cursor: "not-allowed",
-      }}
-    >
-      {label}
-    </button>
-  )
+const bulkActionButton: React.CSSProperties = {
+  fontSize: "11px",
+  fontWeight: 500,
+  padding: "5px 10px",
+  borderRadius: "5px",
+  border: "0.5px solid var(--color-border-secondary)",
+  background: "transparent",
+  color: "var(--color-text-primary)",
+  cursor: "pointer",
+  textDecoration: "none",
+  display: "inline-flex",
+  alignItems: "center",
 }
 
 function shortenOsVersion(v: string): string {
