@@ -17,6 +17,8 @@ import {
   formatPurchaseDate,
   normalizeSoftwareName,
 } from "@/lib/format-inventory"
+import { getDevicePatches, type DevicePatchRow, type DevicePatchSummary } from "@/lib/device-patches"
+import PatchesScanButton from "@/components/PatchesScanButton"
 import { markRemoteSessionClosed } from "../../remote-sessions/actions"
 import { Chip } from "@/components/ui/Chip"
 import NotesCard from "@/components/NotesCard"
@@ -27,9 +29,9 @@ export const dynamic = "force-dynamic"
 const TABS = [
   { id: "summary",  label: "Summary",  phase: null as string | null },
   { id: "system",   label: "System",   phase: null },
-  { id: "patches",  label: "Patches",  phase: "Phase 4" },
+  { id: "patches",  label: "Patches",  phase: null },
   { id: "scripts",  label: "Scripts",  phase: null },
-  { id: "software", label: "Software", phase: "Phase 3" },
+  { id: "software", label: "Software", phase: null },
   { id: "network",  label: "Network",  phase: null },
   { id: "activity", label: "Activity", phase: null },
   { id: "alerts",   label: "Alerts",   phase: null },
@@ -129,7 +131,7 @@ export default async function DeviceDetailPage({
   `
   const posture = postureRows[0] ?? null
 
-  const [alerts, activity, scriptRuns, availableScripts, fleet, maint, ctx, deviceMeta, remoteSessions] = await Promise.all([
+  const [alerts, activity, scriptRuns, availableScripts, patches, fleet, maint, ctx, deviceMeta, remoteSessions] = await Promise.all([
     getDeviceAlerts(id),
     getDeviceActivity(id, 30),
     getDeviceScriptRuns(id, 20),
@@ -139,6 +141,7 @@ export default async function DeviceDetailPage({
       orderBy: [{ isCurated: "desc" }, { name: "asc" }],
       take: 50,
     }),
+    getDevicePatches(id, 200),
     listDevices(),
     prisma.fl_Device
       .findUnique({
@@ -201,7 +204,7 @@ export default async function DeviceDetailPage({
         {tab === "system"   && <SystemTab device={device} />}
         {tab === "alerts"   && <AlertsTab alerts={alerts} />}
         {tab === "activity" && <ActivityFeed items={activity} title="Device activity" />}
-        {tab === "patches"  && <PatchesTab device={device} />}
+        {tab === "patches"  && <PatchesTab device={device} patches={patches} />}
         {tab === "scripts"  && <ScriptsTab deviceId={device.id} runs={scriptRuns} availableScripts={availableScripts} />}
         {tab === "software" && <SoftwareTab device={device} fleetSize={fleetSize} fleetAppCounts={fleetAppCounts} />}
         {tab === "network"  && <NetworkTab device={device} />}
@@ -617,45 +620,164 @@ function SystemTab({ device }: { device: DeviceRow }) {
   )
 }
 
-function PatchesTab({ device }: { device: DeviceRow }) {
+function PatchesTab({
+  device,
+  patches,
+}: {
+  device: DeviceRow
+  patches: { rows: DevicePatchRow[]; summary: DevicePatchSummary }
+}) {
   const inv = device.inventory
-  if (!inv) {
-    return (
-      <Card title="Patches · Phase 4">
-        <Empty>No inventory snapshot yet — agent has not reported.</Empty>
-      </Card>
-    )
-  }
-  const lastChecked = new Date(inv.patches.lastChecked)
-  const ageMs = Date.now() - lastChecked.getTime()
-  const ageDays = Math.floor(ageMs / 86_400_000)
-  const stale = ageDays > 7
-  const fullyPatched = inv.patches.pending === 0 && inv.patches.failed === 0
+  const { rows, summary } = patches
+
+  // Posture tiles read off Fl_PatchInstall first (real per-patch state),
+  // falling back to the inventory snapshot for "last check" age + empty
+  // states. If both are absent the host hasn't reported yet.
+  const lastChecked = inv ? new Date(inv.patches.lastChecked) : null
+  const ageDays = lastChecked
+    ? Math.floor((Date.now() - lastChecked.getTime()) / 86_400_000)
+    : null
+  const stale = ageDays !== null && ageDays > 7
+  const fullyPatched = summary.missing === 0 && summary.failed === 0 && rows.length > 0
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
       <Card title="Patch posture">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "12px", marginBottom: "12px" }}>
-          <PostureTile label="Pending" value={String(inv.patches.pending)} tone={inv.patches.pending > 0 ? "warn" : "ok"} />
-          <PostureTile label="Failed"  value={String(inv.patches.failed)}  tone={inv.patches.failed  > 0 ? "danger" : "ok"} />
-          <PostureTile label="Last check" value={ageDays === 0 ? "today" : `${ageDays}d ago`} tone={stale ? "warn" : "neutral"} />
-          <PostureTile label="Status" value={fullyPatched ? "Up to date" : "Updates available"} tone={fullyPatched ? "ok" : "warn"} />
+          <PostureTile
+            label="Missing"
+            value={String(summary.missing)}
+            tone={summary.kevMissing > 0 ? "danger" : summary.missing > 0 ? "warn" : "ok"}
+          />
+          <PostureTile
+            label="KEV missing"
+            value={String(summary.kevMissing)}
+            tone={summary.kevMissing > 0 ? "danger" : "ok"}
+          />
+          <PostureTile
+            label="Failed"
+            value={String(summary.failed)}
+            tone={summary.failed > 0 ? "danger" : "ok"}
+          />
+          <PostureTile
+            label="Last check"
+            value={ageDays === null ? "never" : ageDays === 0 ? "today" : `${ageDays}d ago`}
+            tone={ageDays === null ? "neutral" : stale ? "warn" : "neutral"}
+          />
         </div>
-        <p style={{ fontSize: "11.5px", color: "var(--color-text-muted)", margin: 0, lineHeight: 1.55 }}>
-          Last checked {lastChecked.toISOString().slice(0, 16).replace("T", " ")} UTC.{" "}
-          See <Link href="/patches" style={{ color: "var(--color-text-secondary)", textDecoration: "underline" }}>fleet-wide posture</Link>{" "}
-          for cross-client rollouts and ring approvals.
-        </p>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <span style={{ fontSize: "11.5px", color: "var(--color-text-muted)", lineHeight: 1.55 }}>
+            {lastChecked
+              ? `Last checked ${lastChecked.toISOString().slice(0, 16).replace("T", " ")} UTC.`
+              : "Agent has not reported a patch scan yet."}
+            {" "}
+            See <Link href="/patches" style={{ color: "var(--color-text-secondary)", textDecoration: "underline" }}>fleet-wide posture</Link>{" "}
+            for cross-client rollouts and ring approvals.
+          </span>
+          <PatchesScanButton deviceId={device.id} />
+        </div>
       </Card>
-      <Card title="Phase 4 capabilities">
-        <ul style={{ margin: 0, padding: "0 0 0 18px", color: "var(--color-text-secondary)", fontSize: "12.5px", lineHeight: 1.7 }}>
-          <li>Per-KB list with severity, vendor, and supersedes chain</li>
-          <li>Ring assignment (canary / wave 1 / wave 2) with halt-on-failure</li>
-          <li>Deferral windows and per-host blackout overrides</li>
-          <li>Force-install with reboot scheduling and pre-reboot warning</li>
-          <li>Rollback for failed installs that pinned a known-bad KB</li>
-        </ul>
+
+      <Card title={`Patches · ${rows.length}${rows.length >= 200 ? "+" : ""}`}>
+        {rows.length === 0 ? (
+          <Empty>
+            {fullyPatched
+              ? "Fully patched — every detected entry is installed."
+              : "No patch state recorded for this device yet. Click \"Scan now\" to trigger a fresh detection."}
+          </Empty>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12.5px" }}>
+            <thead>
+              <tr style={thHeadRow}>
+                <th style={thStyle}>KB / patch</th>
+                <th style={thStyle}>Class</th>
+                <th style={thStyle}>State</th>
+                <th style={thStyle}>Severity</th>
+                <th style={thStyle}>Last seen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((p) => (
+                <tr key={p.installId} style={{ borderTop: "0.5px solid var(--color-border-tertiary)" }}>
+                  <td style={tdStyle}>
+                    <Link
+                      href={`/patches/${p.patchId}`}
+                      style={{ color: "var(--color-text-primary)", textDecoration: "none", fontWeight: 500 }}
+                    >
+                      {p.sourceId}
+                    </Link>
+                    <div style={{ fontSize: 10.5, color: "var(--color-text-muted)", marginTop: 2 }}>
+                      {p.title}
+                    </div>
+                  </td>
+                  <td style={tdStyle}>
+                    <code style={{
+                      fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                      fontSize: 10.5,
+                      padding: "1px 6px",
+                      background: "var(--color-background-tertiary)",
+                      border: "0.5px solid var(--color-border-tertiary)",
+                      borderRadius: 4,
+                      color: "var(--color-text-secondary)",
+                    }}>{p.classification}</code>
+                  </td>
+                  <td style={tdStyle}>
+                    <PatchStatePill state={p.state} />
+                    {p.failureReason && p.state === "failed" && (
+                      <div style={{ fontSize: 10.5, color: "var(--color-danger)", marginTop: 2 }}>
+                        {p.failureReason}
+                      </div>
+                    )}
+                  </td>
+                  <td style={tdStyle}>
+                    {p.isKev && (
+                      <span style={{ fontSize: 10, padding: "1px 5px", marginRight: 4, borderRadius: 3, background: "var(--color-danger)", color: "#fff", fontWeight: 600 }}>
+                        KEV
+                      </span>
+                    )}
+                    {p.cvssMax != null ? (
+                      <span style={{ fontSize: 11, color: p.cvssMax >= 7 ? "var(--color-danger)" : p.cvssMax >= 4 ? "var(--color-warning)" : "var(--color-text-muted)" }}>
+                        {p.cvssMax.toFixed(1)}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>—</span>
+                    )}
+                  </td>
+                  <td style={tdStyle}>
+                    <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+                      {relativeLastSeen(p.lastDetectedAt)}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </Card>
     </div>
+  )
+}
+
+function PatchStatePill({ state }: { state: string }) {
+  const tone =
+    state === "missing" ? "var(--color-warning)" :
+    state === "installed" ? "var(--color-success)" :
+    state === "failed" ? "var(--color-danger)" :
+    state === "preflight-failed" ? "var(--color-danger)" :
+    state === "superseded" ? "var(--color-text-muted)" :
+    "var(--color-text-muted)"
+  return (
+    <span style={{
+      fontSize: 10.5,
+      padding: "1px 6px",
+      borderRadius: 3,
+      background: "var(--color-background-tertiary)",
+      color: tone,
+      border: `0.5px solid ${tone}`,
+      whiteSpace: "nowrap",
+    }}>
+      {state}
+    </span>
   )
 }
 
@@ -671,7 +793,7 @@ function SoftwareTab({
   const inv = device.inventory
   if (!inv) {
     return (
-      <Card title="Software · Phase 3">
+      <Card title="Software">
         <Empty>No inventory snapshot yet — agent has not reported.</Empty>
       </Card>
     )
@@ -710,20 +832,19 @@ function SoftwareTab({
               ))}
             </ul>
             {inv.software.totalInstalled > inv.software.sample.length && (
-              <div style={{ marginTop: "12px", fontSize: "11px", color: "var(--color-text-muted)" }}>
-                + {inv.software.totalInstalled - inv.software.sample.length} more — full list ships in Phase 3
+              <div style={{ marginTop: "12px", fontSize: "11px", color: "var(--color-text-muted)", lineHeight: 1.55 }}>
+                Agent reports <strong>{inv.software.totalInstalled}</strong> installed applications;
+                the inventory beacon only ships a {inv.software.sample.length}-entry sample to keep
+                the JSON payload small. Full per-host enumeration would require an
+                agent-side change (raise the sample cap or add a paginated
+                <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", padding: "0 4px" }}>
+                  software.list
+                </code>
+                verb).
               </div>
             )}
           </>
         )}
-      </Card>
-      <Card title="Phase 3 capabilities">
-        <ul style={{ margin: 0, padding: "0 0 0 18px", color: "var(--color-text-secondary)", fontSize: "12.5px", lineHeight: 1.7 }}>
-          <li>Full installed-app list with version, install date, and source (winget / choco / brew / msi)</li>
-          <li>One-click install / uninstall / upgrade with canary → wave rollout</li>
-          <li>Per-app version pinning to keep known-good builds across the fleet</li>
-          <li>Detect drift from per-client software baselines</li>
-        </ul>
       </Card>
     </div>
   )
