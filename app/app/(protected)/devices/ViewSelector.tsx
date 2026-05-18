@@ -2,6 +2,21 @@
 
 import { useRouter, useSearchParams } from "next/navigation"
 import { useEffect, useMemo, useRef, useState } from "react"
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core"
+import {
+  SortableContext,
+  useSortable,
+  horizontalListSortingStrategy,
+  arrayMove,
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
 import type {
   DeviceViewRow,
   ViewFilters,
@@ -10,6 +25,7 @@ import type {
 import {
   createDeviceView,
   deleteDeviceView,
+  reorderDeviceViews,
   setDefaultDeviceView,
   updateDeviceView,
 } from "@/lib/device-views"
@@ -55,12 +71,63 @@ export function ViewSelector({
     return () => document.removeEventListener("mousedown", handleClick)
   }, [])
 
+  // Local optimistic order overrides — reset when the server views change.
+  const [personalOrder, setPersonalOrder] = useState<string[] | null>(null)
+  const [sharedOrder, setSharedOrder] = useState<string[] | null>(null)
+  useEffect(() => {
+    setPersonalOrder(null)
+    setSharedOrder(null)
+  }, [views])
+
   const grouped = useMemo(() => {
     const sys = views.filter((v) => v.visibility === "SYSTEM")
-    const shared = views.filter((v) => v.visibility === "SHARED")
-    const personal = views.filter((v) => v.visibility === "PERSONAL")
-    return { sys, shared, personal }
-  }, [views])
+    const sharedRaw = views.filter((v) => v.visibility === "SHARED")
+    const personalRaw = views.filter((v) => v.visibility === "PERSONAL")
+    function applyOrder(list: DeviceViewRow[], override: string[] | null) {
+      if (!override) return list
+      const map = new Map(list.map((v) => [v.id, v]))
+      return override
+        .map((id) => map.get(id))
+        .filter((v): v is DeviceViewRow => v != null)
+    }
+    return {
+      sys,
+      shared: applyOrder(sharedRaw, sharedOrder),
+      personal: applyOrder(personalRaw, personalOrder),
+    }
+  }, [views, personalOrder, sharedOrder])
+
+  // 8px activation distance — keeps click-to-select working alongside
+  // drag-to-reorder. Below the threshold = click; above = drag.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+  )
+
+  function makeReorderHandler(
+    visibility: "PERSONAL" | "SHARED",
+    list: DeviceViewRow[],
+    setLocal: (ids: string[]) => void,
+  ) {
+    return async (e: DragEndEvent) => {
+      const { active, over } = e
+      if (!over || active.id === over.id) return
+      const oldIdx = list.findIndex((v) => v.id === active.id)
+      const newIdx = list.findIndex((v) => v.id === over.id)
+      if (oldIdx === -1 || newIdx === -1) return
+      const next = arrayMove(list, oldIdx, newIdx).map((v) => v.id)
+      setLocal(next)
+      try {
+        const r = await reorderDeviceViews({ visibility, orderedIds: next })
+        if (!r.ok) {
+          alert(r.error)
+          setLocal([]) // clear override so next render shows server truth
+        }
+      } catch (err: unknown) {
+        alert((err as Error)?.message ?? "Failed to save view order")
+        setLocal([])
+      }
+    }
+  }
 
   function switchToView(viewId: string | null) {
     const next = new URLSearchParams(params.toString())
@@ -125,68 +192,104 @@ export function ViewSelector({
     router.refresh()
   }
 
-  function renderPills(list: DeviceViewRow[], editable: boolean) {
-    return list.map((v) => {
-      const active = v.id === activeViewId
-      const isDefault = v.id === defaultViewId
-      return (
-        <span key={v.id} style={{ position: "relative", display: "inline-flex" }}>
-          <button
-            type="button"
-            onClick={() => switchToView(v.id)}
-            style={{
-              ...pillStyle,
-              ...(active ? pillActiveStyle : null),
-            }}
-            title={isDefault ? `${v.name} (default)` : v.name}
-          >
-            {v.icon && <span style={{ marginRight: 5 }}>{v.icon}</span>}
-            {v.name}
-            {isDefault && <span style={{ marginLeft: 6, color: "var(--color-warning)" }} aria-label="default">★</span>}
-            {editable && (
-              <span
-                role="button"
-                tabIndex={0}
-                onClick={(e) => {
+  function renderPillBody(v: DeviceViewRow, editable: boolean) {
+    const active = v.id === activeViewId
+    const isDefault = v.id === defaultViewId
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => switchToView(v.id)}
+          style={{
+            ...pillStyle,
+            ...(active ? pillActiveStyle : null),
+          }}
+          title={isDefault ? `${v.name} (default)` : v.name}
+        >
+          {v.icon && <span style={{ marginRight: 5 }}>{v.icon}</span>}
+          {v.name}
+          {isDefault && <span style={{ marginLeft: 6, color: "var(--color-warning)" }} aria-label="default">★</span>}
+          {editable && (
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(e) => {
+                e.stopPropagation()
+                setShowMenu(showMenu === v.id ? null : v.id)
+              }}
+              onPointerDown={(e) => {
+                // Keep the chevron immune from drag-activation.
+                e.stopPropagation()
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
                   e.stopPropagation()
                   setShowMenu(showMenu === v.id ? null : v.id)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    setShowMenu(showMenu === v.id ? null : v.id)
-                  }
-                }}
-                style={menuChevronStyle}
-                aria-label={`Open menu for ${v.name}`}
-              >
-                ⋯
-              </span>
-            )}
-          </button>
-          {showMenu === v.id && (
-            <div ref={menuRef} style={popoverStyle}>
-              {!isDefault && (
-                <button type="button" onClick={() => setDefault(v.id)} style={popoverItemStyle}>
-                  Set as default
-                </button>
-              )}
-              <button type="button" onClick={() => rename(v.id)} style={popoverItemStyle}>
-                Rename…
-              </button>
-              <button
-                type="button"
-                onClick={() => remove(v.id)}
-                style={{ ...popoverItemStyle, color: "var(--color-danger)" }}
-              >
-                Delete
-              </button>
-            </div>
+                }
+              }}
+              style={menuChevronStyle}
+              aria-label={`Open menu for ${v.name}`}
+            >
+              ⋯
+            </span>
           )}
+        </button>
+        {showMenu === v.id && (
+          <div ref={menuRef} style={popoverStyle}>
+            {!isDefault && (
+              <button type="button" onClick={() => setDefault(v.id)} style={popoverItemStyle}>
+                Set as default
+              </button>
+            )}
+            <button type="button" onClick={() => rename(v.id)} style={popoverItemStyle}>
+              Rename…
+            </button>
+            <button
+              type="button"
+              onClick={() => remove(v.id)}
+              style={{ ...popoverItemStyle, color: "var(--color-danger)" }}
+            >
+              Delete
+            </button>
+          </div>
+        )}
+      </>
+    )
+  }
+
+  function renderSortableGroup(
+    list: DeviceViewRow[],
+    visibility: "PERSONAL" | "SHARED",
+    setLocal: (ids: string[]) => void,
+    canEdit: boolean,
+  ) {
+    if (!canEdit) {
+      // Read-only group — render plain non-sortable spans.
+      return list.map((v) => (
+        <span key={v.id} style={{ position: "relative", display: "inline-flex" }}>
+          {renderPillBody(v, false)}
         </span>
-      )
-    })
+      ))
+    }
+    return (
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={makeReorderHandler(visibility, list, setLocal)}
+      >
+        <SortableContext
+          items={list.map((v) => v.id)}
+          strategy={horizontalListSortingStrategy}
+        >
+          {list.map((v) => (
+            <SortablePill key={v.id} id={v.id}>
+              {renderPillBody(v, true)}
+            </SortablePill>
+          ))}
+        </SortableContext>
+      </DndContext>
+    )
   }
 
   const hasOverlay =
@@ -203,27 +306,31 @@ export function ViewSelector({
 
   return (
     <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
-      {/* SYSTEM views — never editable. */}
+      {/* SYSTEM views — never editable, never sortable (admin-only via /admin). */}
       {grouped.sys.length > 0 && (
         <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-          {renderPills(grouped.sys, false)}
+          {grouped.sys.map((v) => (
+            <span key={v.id} style={{ position: "relative", display: "inline-flex" }}>
+              {renderPillBody(v, false)}
+            </span>
+          ))}
         </div>
       )}
-      {/* SHARED views — admin can edit, all can pick. */}
+      {/* SHARED views — admin can edit + drag-reorder. */}
       {grouped.shared.length > 0 && (
         <>
           <Divider />
           <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-            {renderPills(grouped.shared, isAdmin)}
+            {renderSortableGroup(grouped.shared, "SHARED", setSharedOrder, isAdmin)}
           </div>
         </>
       )}
-      {/* PERSONAL views — owner edits. */}
+      {/* PERSONAL views — owner edits + drag-reorder. */}
       {grouped.personal.length > 0 && (
         <>
           <Divider />
           <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-            {renderPills(grouped.personal, true)}
+            {renderSortableGroup(grouped.personal, "PERSONAL", setPersonalOrder, true)}
           </div>
         </>
       )}
@@ -305,6 +412,31 @@ export function ViewSelector({
 function Divider() {
   return (
     <span aria-hidden style={{ width: 1, height: 18, background: "var(--color-border-tertiary)", margin: "0 4px" }} />
+  )
+}
+
+/** Draggable wrapper. Drag listeners attach to the whole pill — the
+ *  chevron stops onPointerDown so clicks on it open the menu instead
+ *  of starting a drag. */
+function SortablePill({ id, children }: { id: string; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id })
+  return (
+    <span
+      ref={setNodeRef}
+      style={{
+        position: "relative",
+        display: "inline-flex",
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.5 : 1,
+        touchAction: "none",
+      }}
+      {...attributes}
+      {...listeners}
+    >
+      {children}
+    </span>
   )
 }
 
