@@ -281,6 +281,44 @@ const patchesReport = z.object({
   error: z.string().optional(),
 })
 
+// Phase 10 WS-A §3.2 — return-frame envelopes from the pcc2k-agent
+// handlers Phase 9 dispatched (shell.open/close/exited, file.push/
+// pull/transfer.complete, backup.trigger/cancel/complete). Without
+// these, sessions stay state="open" until the watcher cron times
+// them out + dispatch returns 400 to the gateway.
+const shellExited = z.object({
+  method: z.literal("shell.exited"),
+  agentId: z.string().min(1),
+  ts: z.string(),
+  sessionId: z.string().min(1),
+  /// "operator" | "timeout" | "disconnect" | "error"
+  exitReason: z.string().min(1),
+  bytesTx: z.number().int().nonnegative().optional(),
+  bytesRx: z.number().int().nonnegative().optional(),
+})
+
+const fileTransferComplete = z.object({
+  method: z.literal("file.transfer.complete"),
+  agentId: z.string().min(1),
+  ts: z.string(),
+  transferId: z.string().min(1),
+  /// "completed" | "failed" | "cancelled"
+  state: z.enum(["completed", "failed", "cancelled"]),
+  sha256: z.string().nullish(),
+  sizeBytes: z.number().int().nonnegative().nullish(),
+  errorMsg: z.string().nullish(),
+})
+
+const backupComplete = z.object({
+  method: z.literal("backup.complete"),
+  agentId: z.string().min(1),
+  ts: z.string(),
+  runId: z.string().min(1),
+  /// "completed" | "failed" | "cancelled"
+  state: z.enum(["completed", "failed", "cancelled"]),
+  errorMsg: z.string().nullish(),
+})
+
 const envelope = z.discriminatedUnion("method", [
   inventoryReport,
   heartbeat,
@@ -293,6 +331,9 @@ const envelope = z.discriminatedUnion("method", [
   patchesComplete,
   patchesAdvisoryFire,
   patchesReport,
+  shellExited,
+  fileTransferComplete,
+  backupComplete,
 ])
 
 export type AgentEnvelope = z.infer<typeof envelope>
@@ -334,6 +375,9 @@ export async function handleAgentEnvelope(raw: unknown): Promise<IngestResult> {
         "patches.complete",
         "patches.advisory.fire",
         "patches.report",
+        "shell.exited",
+        "file.transfer.complete",
+        "backup.complete",
       ]
       if (!supported.includes(m as AgentEnvelope["method"])) {
         throw new MethodNotSupportedError(m)
@@ -364,7 +408,123 @@ export async function handleAgentEnvelope(raw: unknown): Promise<IngestResult> {
       return handlePatchesAdvisoryFire(parsed.data)
     case "patches.report":
       return handlePatchesReport(parsed.data)
+    case "shell.exited":
+      return handleShellExited(parsed.data)
+    case "file.transfer.complete":
+      return handleFileTransferComplete(parsed.data)
+    case "backup.complete":
+      return handleBackupComplete(parsed.data)
   }
+}
+
+// Phase 10 WS-A §3.2 — close the Phase 9 loop. Each callback updates
+// the row state + writes an audit row so /audit surfaces the agent's
+// terminal state. Failure to find the row is non-fatal — the agent
+// may emit a stale callback after the watcher cron already timed
+// out the session.
+
+async function handleShellExited(env: z.infer<typeof shellExited>): Promise<IngestResult> {
+  const existing = await prisma.fl_ShellSession.findUnique({
+    where: { id: env.sessionId },
+    select: { deviceId: true, state: true },
+  })
+  if (!existing) {
+    return { method: "shell.exited", deviceId: "" }
+  }
+  // Map exitReason to terminal state.
+  const state =
+    env.exitReason === "operator" || env.exitReason === "timeout"
+      ? "closed"
+      : env.exitReason === "disconnect"
+        ? "agent-disconnected"
+        : "closed"
+  await prisma.fl_ShellSession.update({
+    where: { id: env.sessionId },
+    data: {
+      state,
+      closedAt: existing.state === "open" ? new Date() : undefined,
+      exitReason: env.exitReason,
+      bytesTx: env.bytesTx ?? 0,
+      bytesRx: env.bytesRx ?? 0,
+    },
+  })
+  await writeAudit({
+    deviceId: existing.deviceId,
+    action: "shell.exited",
+    outcome: env.exitReason === "error" ? "error" : "ok",
+    detail: {
+      sessionId: env.sessionId,
+      exitReason: env.exitReason,
+      bytesTx: env.bytesTx ?? null,
+      bytesRx: env.bytesRx ?? null,
+    },
+  }).catch(() => {})
+  return { method: "shell.exited", deviceId: existing.deviceId }
+}
+
+async function handleFileTransferComplete(
+  env: z.infer<typeof fileTransferComplete>,
+): Promise<IngestResult> {
+  const existing = await prisma.fl_FileTransfer.findUnique({
+    where: { id: env.transferId },
+    select: { deviceId: true },
+  })
+  if (!existing) {
+    return { method: "file.transfer.complete", deviceId: "" }
+  }
+  await prisma.fl_FileTransfer.update({
+    where: { id: env.transferId },
+    data: {
+      state: env.state,
+      sha256: env.sha256 ?? null,
+      sizeBytes: env.sizeBytes ?? null,
+      errorMsg: env.errorMsg ?? null,
+      completedAt: new Date(),
+    },
+  })
+  await writeAudit({
+    deviceId: existing.deviceId,
+    action: "file.transfer.complete",
+    outcome: env.state === "completed" ? "ok" : "error",
+    detail: {
+      transferId: env.transferId,
+      state: env.state,
+      sha256: env.sha256 ?? null,
+      sizeBytes: env.sizeBytes ?? null,
+      errorMsg: env.errorMsg ?? null,
+    },
+  }).catch(() => {})
+  return { method: "file.transfer.complete", deviceId: existing.deviceId, state: env.state }
+}
+
+async function handleBackupComplete(env: z.infer<typeof backupComplete>): Promise<IngestResult> {
+  const existing = await prisma.fl_BackupRun.findUnique({
+    where: { id: env.runId },
+    select: { deviceId: true, startedAt: true },
+  })
+  if (!existing) {
+    return { method: "backup.complete", deviceId: "" }
+  }
+  await prisma.fl_BackupRun.update({
+    where: { id: env.runId },
+    data: {
+      state: env.state,
+      errorMsg: env.errorMsg ?? null,
+      startedAt: existing.startedAt ?? new Date(),
+      completedAt: new Date(),
+    },
+  })
+  await writeAudit({
+    deviceId: existing.deviceId,
+    action: "backup.complete",
+    outcome: env.state === "completed" ? "ok" : "error",
+    detail: {
+      runId: env.runId,
+      state: env.state,
+      errorMsg: env.errorMsg ?? null,
+    },
+  }).catch(() => {})
+  return { method: "backup.complete", deviceId: existing.deviceId, state: env.state }
 }
 
 async function upsertDevice(args: {
