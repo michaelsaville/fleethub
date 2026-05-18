@@ -315,8 +315,30 @@ asset/warranty:**
     `warrantyExpiresAt < now() + INTERVAL '90 days'`. Reuses
     existing report-rendering pipeline (Phase 5).
 
-**Workstream D — Mobile MSP + project-close gates + close docs:**
+**Workstream D — Mobile MSP + deploy-from-panel + project-close gates + close docs:**
 
+- **Deploy-from-panel** (operator-driven agent enrollment; see
+  `~/pcc2k-agent/docs/AGENT-BACKLOG.md` for the agent-side flow):
+  - `Fl_EnrollToken { token, tenantName, createdBy, createdAt,
+    expiresAt, consumedAt?, consumedByAgentId? }` — one-time
+    bootstrap token. 32-byte hex id is the PK; 24h default TTL.
+  - `POST /api/admin/enroll-tokens` (withAudit, ADMIN-only):
+    body `{ tenantName, ttlHours? }`. Returns `{ token,
+    expiresAt, bootstrapSnippetUnix, bootstrapSnippetWindows }`.
+  - `POST /api/agent-ingest/enroll` — bootstrap consumer.
+    Validates token (unused + unexpired), creates `Op_Agent` +
+    secret, marks consumed. Returns
+    `{ agentId, agentSecret, fleethubBaseUrl }`. 410-Gone on
+    re-use.
+  - `GET /install/bootstrap.sh` + `GET /install/bootstrap.ps1` —
+    static one-liners served from `~/pcc2k-agent/scripts/`
+    (mounted via Next.js public assets or proxy from agent repo
+    release tarball).
+  - `/clients/[name]?tab=install` page: TTL picker, "Generate
+    install command" button, copy-once-revealed snippet. Token
+    shown ONCE (similar to Phase 11 recovery-code reveal pattern).
+  - Audit verbs: `enroll-token.created`, `enroll-token.consumed`,
+    `enroll-token.expired`.
 - Mobile MSP:
   - `@media (max-width: 720px)` swap `<table>` for `<ul>` of
     cards: client name + risk chip + worst-of-three signal
@@ -385,10 +407,11 @@ asset/warranty:**
 **All additions pure-additive. No DROP. No NOT NULL on existing
 columns. DB backup BEFORE DDL apply.**
 
-New tables (3):
+New tables (4):
 - `Fl_ProcessSnapshot` (single-row-per-operator-click; no time-series)
 - `Fl_AvAction` (verb-agnostic; reviewed-shape per architect §9)
 - `Fl_PsaAdapter` (ConnectWise outbound config)
+- `Fl_EnrollToken` (one-time agent bootstrap token; deploy-from-panel)
 
 New columns:
 - `Fl_ShellSession`: `recordingPath String?`, `recordingBytes Int?`
@@ -590,6 +613,7 @@ WS-C.3 Fl_Monitor.expressionJson + ExpressionEditor consumer
 WS-C.4 Fl_PsaAdapter schema + ConnectWise outbound dispatcher
 WS-C.5 /devices/[id]?tab=asset form + warranty-90d report kind
 
+WS-D.0 Fl_EnrollToken schema + /api/admin/enroll-tokens + /api/agent-ingest/enroll + /install/bootstrap.{sh,ps1} + /clients/[name]?tab=install page (deploy-from-panel)
 WS-D.1 Mobile MSP card list @media query
 WS-D.2 /api/health returns {version, phase, buildSha} + chainOk
 WS-D.3 lib/audit-chain-self-test.ts + instrumentation hook
