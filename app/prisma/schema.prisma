@@ -28,6 +28,18 @@ model Fl_StaffUser {
   /// phone are skipped during sms-channel resolution.
   phoneE164 String?
   isActive  Boolean  @default(true)
+  /// Phase 9 WS-B §4.6 — TOTP MFA. When totpSecret is set, the
+  /// NextAuth credentials provider requires a fresh 6-digit code
+  /// (or a recovery code) after password verification. v1 is TOTP-
+  /// only; WebAuthn deferred to Phase 10.
+  totpSecret         String?
+  totpEnabledAt      DateTime?
+  /// 10 bcrypt'd one-time recovery codes, encoded as JSON array.
+  recoveryCodesJson  String?
+  /// When set on the user's row, MFA enrollment is required at next
+  /// login. Per-tenant Fl_Tenant.mfaRequired forces this for all
+  /// users on the tenant.
+  mfaEnforcedAt      DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -140,8 +152,21 @@ model Fl_Device {
   /// Lets the UI surface "posture stale" when this lags lastSeenAt
   /// significantly.
   postureReportedAt  DateTime?
+  /// Phase 9 WS-C §5.2 — asset/warranty lifecycle. Operator-editable;
+  /// agent never sets these. Drives "warranty expiring 90d" report
+  /// and per-device asset-value rollup.
+  assetTag           String?
+  purchasedAt        DateTime?
+  purchasePriceCents Int?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+
+  /// Phase 9 WS-C §5.4 — operator-initiated backup runs from /devices/[id].
+  backupRuns   Fl_BackupRun[]
+  /// Phase 9 WS-D §6.1 — interactive shell sessions.
+  shellSessions Fl_ShellSession[]
+  /// Phase 9 WS-D §6.2 — file transfers to/from this device.
+  fileTransfers Fl_FileTransfer[]
 
   @@unique([clientName, hostname])
   @@index([clientName, isOnline])
@@ -206,6 +231,26 @@ model Fl_Tenant {
   /// Phase 5.5 — Scout integration; lets Identity Posture report pull
   /// the latest IdentityAuditResults for this tenant from the Scout app.
   scoutTenantId       String?
+
+  /// Phase 9 WS-B §4.6 — when true, every login on this tenant
+  /// must present TOTP. Users without enrollment are redirected
+  /// to /setup/staff/[id]?tab=mfa on next login.
+  mfaRequired                          Boolean @default(false)
+  /// Phase 9 WS-C §5.3 — opt-in per tenant. When true, the
+  /// /api/cron/psa-sync writes endpoint counts to TicketHub
+  /// TH_ContractItem.quantity for items with syncSource set.
+  psaSyncEnabled                       Boolean @default(false)
+  /// Phase 9 WS-C §5.4 — mutable backup trigger.
+  backupTriggerEnabled                 Boolean @default(false)
+  backupTriggerRequiresJustification   Boolean @default(true)
+  /// Phase 9 WS-D §6.1 — interactive shell sessions.
+  shellSessionsEnabled                 Boolean @default(false)
+  shellRequiresJustification           Boolean @default(true)
+  shellMaxDurationMin                  Int     @default(60)
+  /// Phase 9 WS-D §6.2 — file transfer push/pull.
+  fileTransferEnabled                  Boolean @default(false)
+  fileTransferRequiresJustification    Boolean @default(true)
+  fileTransferMaxSizeMb                Int     @default(100)
 
   createdAt                   DateTime @default(now())
   updatedAt                   DateTime @updatedAt
@@ -478,6 +523,10 @@ model Fl_Monitor {
   lastEvaluatedAt DateTime?
   lastFiredAt     DateTime?
   fireCount       Int      @default(0)
+  /// Phase 9 WS-C §5.1 — optional Fl_DeviceGroup scope. When set,
+  /// the evaluator filters devices by group membership; when null,
+  /// falls back to the tenantName + osFilter shape.
+  scopeGroupId    String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   fires           Fl_MonitorFire[]
@@ -1073,5 +1122,89 @@ model Fl_ReportSchedule {
   @@index([tenantName, isActive])
   @@index([isActive, lastFiredAt])
   @@map("fl_report_schedules")
+  @@schema("fleethub")
+}
+
+// ─── PHASE 9 WS-C §5.4 — MUTABLE BACKUP TRIGGER ──────────────────────────
+
+/// Operator-initiated backup. The agent runs the appropriate
+/// per-product binary (Veeam CLI / wbadmin / restic) keyed by
+/// the device's posture-detected backupProduct. Audit-row written
+/// on trigger + completion. Per-tenant gate via
+/// Fl_Tenant.backupTriggerEnabled.
+model Fl_BackupRun {
+  id            String   @id @default(cuid())
+  deviceId      String
+  device        Fl_Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  /// One of "veeam" | "datto" | "restic" | "windows-backup".
+  /// Mirrors the device's last-known backupProduct at trigger time.
+  product       String
+  triggeredBy   String
+  justification String?
+  /// "queued" | "running" | "completed" | "failed" | "cancelled"
+  state         String
+  startedAt     DateTime?
+  completedAt   DateTime?
+  errorMsg      String?
+  createdAt     DateTime @default(now())
+
+  @@index([deviceId, createdAt(sort: Desc)])
+  @@map("fl_backup_runs")
+  @@schema("fleethub")
+}
+
+// ─── PHASE 9 WS-D §6.1 — INTERACTIVE SHELL ───────────────────────────────
+
+/// One operator-initiated interactive shell session. The agent
+/// spawns the appropriate shell (powershell.exe / bash) and pipes
+/// stdin/stdout via a WSS stream channel. No content is recorded
+/// — only stats. Per-tenant gate via Fl_Tenant.shellSessionsEnabled.
+model Fl_ShellSession {
+  id              String   @id @default(cuid())
+  deviceId        String
+  device          Fl_Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  operatorEmail   String
+  justification   String?
+  openedAt        DateTime @default(now())
+  closedAt        DateTime?
+  /// "open" | "closed" | "timeout" | "agent-disconnected"
+  state           String
+  bytesTx         Int      @default(0)
+  bytesRx         Int      @default(0)
+  /// "operator" | "timeout" | "disconnect" | "error"
+  exitReason      String?
+
+  @@index([deviceId, openedAt(sort: Desc)])
+  @@map("fl_shell_sessions")
+  @@schema("fleethub")
+}
+
+// ─── PHASE 9 WS-D §6.2 — FILE TRANSFER ───────────────────────────────────
+
+/// One push or pull file transfer. Push: operator → agent
+/// (signed-URL bucket, agent fetches). Pull: agent → operator
+/// (chunked upload to server, operator downloads). sha256-gated.
+/// Per-tenant gate via Fl_Tenant.fileTransferEnabled.
+model Fl_FileTransfer {
+  id              String   @id @default(cuid())
+  deviceId        String
+  device          Fl_Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  /// "push" | "pull"
+  direction       String
+  remotePath      String
+  /// Operator-side temp path; null on push until completion.
+  localPath       String?
+  sha256          String?
+  sizeBytes       Int?
+  /// "queued" | "transferring" | "completed" | "failed" | "cancelled"
+  state           String
+  requestedBy     String
+  justification   String?
+  errorMsg        String?
+  requestedAt     DateTime @default(now())
+  completedAt     DateTime?
+
+  @@index([deviceId, requestedAt(sort: Desc)])
+  @@map("fl_file_transfers")
   @@schema("fleethub")
 }
