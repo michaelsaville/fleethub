@@ -464,6 +464,21 @@ namespace they support via `agent.hello.capabilities`.
 | `software.*` | FleetHub | server→agent | FleetHub Phase 3 | `software.install`, `software.uninstall`, `software.list` |
 | `alert.*` | FleetHub (ingress) | agent→server | FleetHub Phase 1 | `alert.fire` |
 | `monitor.*` | OpsHub | both | OpsHub Phase 3 | `monitor.probe.run`, `monitor.report` |
+| `shell.*` | FleetHub | server→agent | FleetHub Phase 9/10 | `shell.open`, `shell.input`, `shell.close` (+ `shell.output`, `shell.exited` notifs) |
+| `file.*` | FleetHub | server→agent | FleetHub Phase 9/10 | `file.push`, `file.pull` (+ `file.transfer.complete` notif) |
+| `backup.*` | FleetHub | server→agent | FleetHub Phase 9 | `backup.trigger`, `backup.cancel` (+ `backup.complete` notif) |
+| `fleet.processes.*` | FleetHub | server→agent | FleetHub Phase 13 / agent v1.0.2 | `fleet.processes.list` (cursor-paginated; see §10.2) |
+| `fleet.services.*` | FleetHub | server→agent | FleetHub Phase 13 / agent v1.0.2 | `fleet.services.list`, `fleet.services.start`, `fleet.services.stop`, `fleet.services.restart` |
+| `fleet.av.*` | FleetHub | server→agent | FleetHub Phase 13 / agent v1.0.2 | `fleet.av.scan`, `fleet.av.update-defs`, `fleet.av.quarantine`, `fleet.av.release`, `fleet.av.cancel` (+ `av.action-complete` notif) |
+| `capabilities.*` | FleetHub | agent→server | agent v1.0.2 | `capabilities.update` (notif fired when detector delta) |
+
+**Note on `windows.services.*` vs `fleet.services.*`:** OpsHub's
+`windows.services.*` (Phase 2) is Windows-only and operator-action-
+gated through OpsHub's RBAC. FleetHub's `fleet.services.*` (agent
+v1.0.2) is cross-platform (linux + windows; macOS list-only via
+`fleet.processes.*`) and gates through FleetHub's Phase-11 4-eyes
+approval. Both namespaces stay reserved; same agent advertises both
+when present. Operator-facing UIs render their own buttons.
 
 **Reserving a new namespace:** add a row here, get sign-off from the
 non-owning console's lead, then implement. Do not squat on namespaces.
@@ -1152,3 +1167,192 @@ hottest as of this writing) but **belongs to all three repos**. Once
 the agent repo exists, this file moves there and FleetHub/OpsHub
 import via git submodule or vendored copy. Until then, any change
 here triggers a sync notice to the OpsHub maintainer.
+
+---
+
+## 21. Cursor pagination contract (agent v1.0.2 / FleetHub Phase 13)
+
+Long-list RPCs that exceed the **outbound frame cap** (256 KB; see §22)
+use opaque-cursor pagination. First-pick caller: `fleet.processes.list`
+(a busy host returns 800+ processes × ~200 bytes = >150 KB easily).
+
+**Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "abc",
+  "method": "fleet.processes.list",
+  "params": {
+    "cursor": "<opaque>",  // optional; omit on first call
+    "limit": 500            // optional; default 500; max 500
+  }
+}
+```
+
+**Response:**
+
+```json
+{
+  "id": "abc",
+  "result": {
+    "processes": [ /* up to `limit` entries */ ],
+    "nextCursor": "<opaque>", // present iff more pages exist
+    "truncated": false        // true iff `limit` was clamped server-side
+  }
+}
+```
+
+**Cursor semantics:**
+
+- **Opaque**. Agent treats as black-box. Server may change encoding
+  between versions (currently `base64(snapshotId+":"+offset)`).
+- **Session-scoped**. A snapshot taken at cursor=`null` (first page)
+  is held in memory by the agent for **5 minutes**. Subsequent
+  cursored requests against the same snapshotId return the same
+  snapshot. After 5 min the snapshot is GC'd; cursored request
+  returns `Fl_Error.code = "cursor-expired"` (agent → server). UI
+  surfaces as "results expired — refresh".
+- **Multi-call ordering.** The agent guarantees stable ordering
+  within a snapshot (sorted by pid for `fleet.processes.list`).
+  Concurrent requests against the SAME snapshotId return the same
+  rows in the same order even on a busy host.
+
+---
+
+## 22. Frame size cap + `response-too-large` error code (agent v1.0.2)
+
+Outbound frames from the agent are capped at **256 KB** (`maxOutboundFrameBytes
+= 256 * 1024`). WSS intermediaries (CloudFront, nginx defaults,
+Cloudflare) cap inbound frames somewhere between 1 MB and 16 MB; 256
+KB is well under all of them and forces clean pagination semantics.
+
+When a response would exceed the cap, the agent returns:
+
+```json
+{
+  "id": "abc",
+  "error": {
+    "code": -32070,
+    "message": "response-too-large",
+    "data": {
+      "estimatedBytes": 612345,
+      "capBytes": 262144,
+      "suggestedAction": "use cursor pagination (see §21)"
+    }
+  }
+}
+```
+
+`Fl_Error.code` strings (FleetHub-side):
+- `response-too-large` (-32070)
+- `cursor-expired` (-32071)
+
+Methods that may return `response-too-large`:
+- `fleet.processes.list` (paginate via §21)
+- `fleet.services.list` (paginate via §21)
+- Future inventory/list-style verbs.
+
+**Streaming notifications** (e.g. `shell.output`, `scripts.output`,
+`backup.complete` log paths) are NOT covered by the cap — their
+chunks are bounded at the PRODUCER (`outputFrameMaxBytes = 16 KB`
+in scripts.go / shell.go) so they never approach the limit.
+
+---
+
+## 23. `capabilities.update` notification (agent v1.0.2)
+
+Capability advertisement is bidirectional:
+
+1. **Initial advertise** — at session start, `agent.hello` carries
+   the full `capabilities` array (see §9).
+2. **Delta update** — if the agent's detector discovers a
+   capability change DURING an active session (operator installs
+   CrowdStrike Falcon while the agent is connected), the agent
+   fires:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "capabilities.update",
+  "params": {
+    "capabilities": [ /* full sorted list */ ]
+  }
+}
+```
+
+**Cadence.** Capability detector runs on the same cadence as the
+posture sweep (15 min default). Notification fires ONLY when the
+sorted+deduped capability list differs from the last-advertised
+value. Stable list = no notification = no log noise.
+
+**Sort invariant.** The slice MUST be sorted before equality check
+on the agent side. Sort drift between runs would fire the
+notification every cycle = infinite log spam = v1.0.1 hotfix risk.
+
+**FleetHub side**: maintains `Op_Agent.capabilities` JSONB column;
+updates atomically on receipt. UI button-gating reads from this
+column, not from the cached hello.
+
+---
+
+## 24. `av.cancel` semantics (agent v1.0.2)
+
+Long-running AV scans (`fleet.av.scan` with kind=FullScan) execute
+inside the AV product's service process, NOT the agent's child
+process. Cancelling via process kill DOES NOT STOP THE SCAN.
+
+The agent MUST invoke the product-native cancel API. For Defender:
+
+```powershell
+powershell.exe -Command "Stop-MpScan"
+```
+
+For CrowdStrike (when v1.1+ adds the implementation): query
+`falconctl status` first; if scan in-progress, hardware-trigger
+cancel is unsupported — return `{state: "unsupported-verb",
+reason: "Falcon scan must be cancelled from Falcon console"}`.
+
+`fleet.av.cancel` callback shape:
+
+```json
+{
+  "method": "av.action-complete",
+  "params": {
+    "runId": "...",
+    "verb": "scan-cancel",
+    "state": "ok" | "unsupported-verb",
+    "errorMsg": "..."
+  }
+}
+```
+
+---
+
+## 25. Backward-compatibility policy (agent v1.0.0)
+
+The v1.0.0 release tag establishes the wire-stability floor.
+
+**Field-additive only.** Existing frame shapes accept NEW optional
+fields silently. Old agents in the field ignore unknown fields;
+new agents fall back to default behavior when an old server omits
+a field.
+
+**Method-rename = new method.** Any rename ships under a new
+method name with the old method kept as a deprecated alias for
+**at least 1 minor version**. Example: if `fleet.processes.list`
+needs a v2 with breaking response shape, `fleet.processes.list2`
+ships alongside; both remain wired for one minor.
+
+**Removed methods.** A 2-minor deprecation window minimum. The
+agent advertises the OLD capability for one minor after the new
+method ships, then removes the capability in the second minor +
+removes the method.
+
+**`protocolVersion` bumps.** The handshake `protocolVersion`
+string bumps on a wire-incompatible change (e.g. binary frame
+format swap, HMAC algorithm change). v1.0.x stays on
+`protocolVersion = "1.0"`.
+
+**This policy applies from v1.0.0 onward.** Pre-1.0 development
+work (Phase 0-12 + agent v0.x) was not bound by it.
