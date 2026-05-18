@@ -21,7 +21,7 @@ const TABS = [
   { id: "summary",  label: "Summary",  phase: null as string | null },
   { id: "system",   label: "System",   phase: null },
   { id: "patches",  label: "Patches",  phase: "Phase 4" },
-  { id: "scripts",  label: "Scripts",  phase: "Phase 2" },
+  { id: "scripts",  label: "Scripts",  phase: null },
   { id: "software", label: "Software", phase: "Phase 3" },
   { id: "network",  label: "Network",  phase: null },
   { id: "activity", label: "Activity", phase: null },
@@ -122,10 +122,16 @@ export default async function DeviceDetailPage({
   `
   const posture = postureRows[0] ?? null
 
-  const [alerts, activity, scriptRuns, fleet, maint, ctx, deviceMeta, remoteSessions] = await Promise.all([
+  const [alerts, activity, scriptRuns, availableScripts, fleet, maint, ctx, deviceMeta, remoteSessions] = await Promise.all([
     getDeviceAlerts(id),
     getDeviceActivity(id, 30),
     getDeviceScriptRuns(id, 20),
+    prisma.fl_Script.findMany({
+      where: { isActive: true },
+      select: { id: true, name: true, shell: true, description: true, category: true, isCurated: true },
+      orderBy: [{ isCurated: "desc" }, { name: "asc" }],
+      take: 50,
+    }),
     listDevices(),
     prisma.fl_Device
       .findUnique({
@@ -189,7 +195,7 @@ export default async function DeviceDetailPage({
         {tab === "alerts"   && <AlertsTab alerts={alerts} />}
         {tab === "activity" && <ActivityFeed items={activity} title="Device activity" />}
         {tab === "patches"  && <PatchesTab device={device} />}
-        {tab === "scripts"  && <ScriptsTab runs={scriptRuns} />}
+        {tab === "scripts"  && <ScriptsTab deviceId={device.id} runs={scriptRuns} availableScripts={availableScripts} />}
         {tab === "software" && <SoftwareTab device={device} fleetSize={fleetSize} fleetAppCounts={fleetAppCounts} />}
         {tab === "network"  && <NetworkTab device={device} />}
         {tab === "remote"   && <RemoteTab
@@ -809,18 +815,83 @@ function NetworkTab({ device }: { device: DeviceRow }) {
   )
 }
 
-function ScriptsTab({ runs }: { runs: DeviceScriptRun[] }) {
+function ScriptsTab({
+  deviceId,
+  runs,
+  availableScripts,
+}: {
+  deviceId: string
+  runs: DeviceScriptRun[]
+  availableScripts: { id: string; name: string; shell: string; description: string | null; category: string | null; isCurated: boolean }[]
+}) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+      <Card title={`Run a script on this host${availableScripts.length ? ` · ${availableScripts.length} available` : ""}`}>
+        {availableScripts.length === 0 ? (
+          <Empty>
+            No scripts in the library yet.{" "}
+            <Link href="/scripts/new" style={{ color: "var(--color-text-secondary)", textDecoration: "underline" }}>
+              Create one
+            </Link>
+            .
+          </Empty>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12.5px" }}>
+            <thead>
+              <tr style={thHeadRow}>
+                <th style={thStyle}>Script</th>
+                <th style={thStyle}>Shell</th>
+                <th style={thStyle}>Category</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {availableScripts.map((s) => (
+                <tr key={s.id} style={{ borderTop: "0.5px solid var(--color-border-tertiary)" }}>
+                  <td style={tdStyle}>
+                    <Link href={`/scripts/${s.id}`} style={{ color: "var(--color-text-primary)", textDecoration: "none", fontWeight: 500 }}>
+                      {s.name}
+                    </Link>
+                    {s.isCurated && (
+                      <span style={{ marginLeft: 6, fontSize: 10, padding: "1px 5px", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 3, color: "var(--color-text-muted)" }}>
+                        curated
+                      </span>
+                    )}
+                    {s.description && (
+                      <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 2 }}>{s.description}</div>
+                    )}
+                  </td>
+                  <td style={tdStyle}>
+                    <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{s.shell}</span>
+                  </td>
+                  <td style={tdStyle}>
+                    <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{s.category ?? "—"}</span>
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}>
+                    <Link
+                      href={`/scripts/${s.id}/run?targetDeviceId=${deviceId}`}
+                      style={{
+                        fontSize: 11,
+                        padding: "3px 10px",
+                        border: "0.5px solid var(--color-border-tertiary)",
+                        borderRadius: 4,
+                        color: "var(--color-text-primary)",
+                        textDecoration: "none",
+                        background: "var(--color-background-tertiary)",
+                      }}
+                    >
+                      Run →
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
       <Card title={`Recent script runs${runs.length ? ` · ${runs.length}` : ""}`}>
         {runs.length === 0 ? (
-          <Empty>
-            No script runs yet on this host.{" "}
-            <Link href="/scripts" style={{ color: "var(--color-text-secondary)", textDecoration: "underline" }}>
-              Browse the script library
-            </Link>{" "}
-            — execution against live hosts ships in Phase 2.
-          </Empty>
+          <Empty>No script runs yet on this host.</Empty>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12.5px" }}>
             <thead>
@@ -867,15 +938,6 @@ function ScriptsTab({ runs }: { runs: DeviceScriptRun[] }) {
             </tbody>
           </table>
         )}
-      </Card>
-      <Card title="Phase 2 capabilities">
-        <ul style={{ margin: 0, padding: "0 0 0 18px", color: "var(--color-text-secondary)", fontSize: "12.5px", lineHeight: 1.7 }}>
-          <li>Run-once and scheduled jobs against this host</li>
-          <li>Dry-run by default; tech opts in to live execution</li>
-          <li>Signed-script enforcement — agent rejects unsigned bodies</li>
-          <li>Truncated stdout inline + full output in object storage</li>
-          <li>Halt + roll-back when a run errors above the configured threshold</li>
-        </ul>
       </Card>
     </div>
   )
