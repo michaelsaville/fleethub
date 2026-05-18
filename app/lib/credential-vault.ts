@@ -32,25 +32,55 @@ const DEK_LEN = 32
 
 /** Per-tenant DEK derivation. Deterministic — same inputs always
  *  return the same key bytes. Uses HKDF-SHA256 with tenantName as
- *  salt and a versioned info string. */
+ *  salt and a versioned info string. Default path uses the ACTIVE
+ *  vault-kek version; refuses non-active versions. For the rewrap
+ *  path, use deriveTenantDekForVersion which takes an explicit
+ *  version + loads even retired keys. */
 async function deriveTenantDek(
   tenantName: string,
   keyVersion: number,
 ): Promise<Buffer> {
   const kek = await getActiveKey("vault-kek")
-  // v1 of Phase 11: only one vault-kek version exists. Rotation UI
-  // is Phase 12 (PHASE-11-DESIGN.md §6). When a non-active version
-  // is requested (rotation path), this throws — caller is then
-  // explicitly responsible for the rotate-rewrap flow.
   if (kek.version !== keyVersion) {
     throw new Error(
       `vault: requested vault-kek v${keyVersion} but active is v${kek.version}. ` +
-        `Multi-version DEK derivation not yet implemented (Phase 12).`,
+        `Use deriveTenantDekForVersion() for the rewrap path.`,
     )
   }
+  return hkdfDek(kek.material, tenantName, keyVersion)
+}
+
+/** Phase 12 WS-C.1 — explicit-version DEK derivation. Loads the
+ *  Fl_CryptoKey row at the requested version (active OR retired)
+ *  and derives. Used by rewrapTenantCredentials in the rotate path
+ *  where v1 must be decrypted then v2 re-encrypted. */
+export async function deriveTenantDekForVersion(
+  tenantName: string,
+  keyVersion: number,
+): Promise<Buffer> {
+  // Reach into Fl_CryptoKey directly for the row at this version.
+  // We can't go through getActiveKey because retired versions are
+  // intentionally not "active".
+  const row = await prisma.fl_CryptoKey.findFirst({
+    where: { purpose: "vault-kek", version: keyVersion },
+  })
+  if (!row) {
+    throw new Error(
+      `vault: no vault-kek row at version=${keyVersion}; rewrap impossible`,
+    )
+  }
+  // Unwrap with the same root-key crypto crypto-key.ts uses. We import
+  // the un-exported helper via a tiny re-implementation — the wrap
+  // format is documented + stable (12-byte nonce || ciphertext+tag).
+  const { unwrapMaterial } = await import("./crypto-key-internal")
+  const material = unwrapMaterial(Buffer.from(row.keyMaterial))
+  return hkdfDek(material, tenantName, keyVersion)
+}
+
+function hkdfDek(kekMaterial: Buffer, tenantName: string, keyVersion: number): Buffer {
   const dek = hkdfSync(
     "sha256",
-    kek.material,
+    kekMaterial,
     Buffer.from(tenantName, "utf8"),
     `vault:${keyVersion}`,
     DEK_LEN,
@@ -284,4 +314,83 @@ export async function rotate(input: RotateInput): Promise<SealResult> {
     return next
   })
   return { id: created.id, keyVersion: created.keyVersion }
+}
+
+
+// ─── PHASE 12 WS-C — VAULT REWRAP (KEK rotation) ────────────────────────────
+
+export interface RewrapProgress {
+  processed: number
+  total: number
+  currentTenant: string | null
+}
+
+export interface RewrapInput {
+  fromVersion: number
+  toVersion: number
+  /** Called after each batch; total is set at start. */
+  onProgress?: (p: RewrapProgress) => void
+}
+
+const REWRAP_BATCH_SIZE = 100
+
+/** Phase 12 WS-C.2 — re-encrypt every active Fl_Credential row under
+ *  the new vault-kek version. Per-row $transaction with SELECT FOR
+ *  UPDATE so a concurrent unseal blocks until row settles. Resumes
+ *  cleanly if interrupted — already-rewrapped rows (keyVersion ==
+ *  toVersion) are skipped. Pure-server. */
+export async function rewrapTenantCredentials(input: RewrapInput): Promise<RewrapProgress> {
+  const total = await prisma.fl_Credential.count({
+    where: { replacedAt: null, keyVersion: input.fromVersion },
+  })
+  let processed = 0
+  let currentTenant: string | null = null
+  while (true) {
+    const batch = await prisma.fl_Credential.findMany({
+      where: { replacedAt: null, keyVersion: input.fromVersion },
+      orderBy: [{ tenantName: "asc" }, { createdAt: "asc" }],
+      take: REWRAP_BATCH_SIZE,
+    })
+    if (batch.length === 0) break
+    for (const row of batch) {
+      currentTenant = row.tenantName
+      // Per-row transaction with FOR UPDATE so any concurrent
+      // unsealForSystemUse() blocks until the rewrap settles.
+      await prisma.$transaction(async (tx) => {
+        // Re-read with FOR UPDATE.
+        const locked = await tx.$queryRaw<{ id: string; nonce: Buffer; ciphertext: Buffer; keyVersion: number }[]>`
+          SELECT id, nonce, ciphertext, "keyVersion"
+          FROM fleethub.fl_credentials
+          WHERE id = ${row.id} AND "replacedAt" IS NULL
+          FOR UPDATE
+        `
+        if (locked.length === 0) return
+        const r = locked[0]
+        if (r.keyVersion !== input.fromVersion) return // someone else rewrapped already
+        // Decrypt with the OLD DEK.
+        const oldDek = await deriveTenantDekForVersion(row.tenantName, input.fromVersion)
+        const plaintext = decryptWithDek(
+          oldDek,
+          Buffer.from(r.ciphertext),
+          Buffer.from(r.nonce),
+        )
+        // Re-encrypt with the NEW DEK.
+        const newDek = await deriveTenantDekForVersion(row.tenantName, input.toVersion)
+        const { ciphertext: ct2, nonce: nonce2 } = encryptWithDek(newDek, plaintext)
+        await tx.fl_Credential.update({
+          where: { id: r.id },
+          data: {
+            ciphertext: new Uint8Array(ct2),
+            nonce: new Uint8Array(nonce2),
+            keyVersion: input.toVersion,
+          },
+        })
+        // Best-effort clear plaintext buffer.
+        plaintext.fill(0)
+      })
+      processed++
+    }
+    input.onProgress?.({ processed, total, currentTenant })
+  }
+  return { processed, total, currentTenant }
 }
