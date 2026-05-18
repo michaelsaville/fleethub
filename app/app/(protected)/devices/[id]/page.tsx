@@ -10,6 +10,7 @@ import type { DeviceAlert, DeviceRow, DeviceScriptRun } from "@/lib/devices"
 import { getSessionContext } from "@/lib/authz"
 import RemoteSessionLauncher from "./RemoteSessionLauncher"
 import RustdeskIdEditor from "./RustdeskIdEditor"
+import FriendlyNameEditor from "@/components/FriendlyNameEditor"
 import { markRemoteSessionClosed } from "../../remote-sessions/actions"
 import { Chip } from "@/components/ui/Chip"
 import NotesCard from "@/components/NotesCard"
@@ -235,20 +236,36 @@ function Breadcrumb({ device }: { device: DeviceRow }) {
 function Header({ device, alertCount }: { device: DeviceRow; alertCount: number }) {
   return (
     <header style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
-      <h1 style={{ ...TYPOGRAPHY.H1, display: "inline-flex", alignItems: "center", gap: "10px" }}>
+      <div style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+          <span
+            aria-label={device.isOnline ? "online" : "offline"}
+            title={device.isOnline ? "online" : "offline"}
+            style={{
+              display: "inline-block",
+              width: "9px",
+              height: "9px",
+              borderRadius: "999px",
+              background: device.isOnline ? "var(--color-success)" : "var(--color-text-muted)",
+            }}
+          />
+          <FriendlyNameEditor
+            deviceId={device.id}
+            initial={device.friendlyName}
+            hostname={device.hostname}
+          />
+        </div>
         <span
-          aria-label={device.isOnline ? "online" : "offline"}
-          title={device.isOnline ? "online" : "offline"}
           style={{
-            display: "inline-block",
-            width: "9px",
-            height: "9px",
-            borderRadius: "999px",
-            background: device.isOnline ? "var(--color-success)" : "var(--color-text-muted)",
+            fontSize: 11,
+            color: "var(--color-text-muted)",
+            fontFamily: "ui-monospace, SFMono-Regular, monospace",
+            paddingLeft: 19,
           }}
-        />
-        {device.hostname}
-      </h1>
+        >
+          {device.hostname}
+        </span>
+      </div>
       <Pill text={device.clientName} />
       {device.os && <Pill text={device.os} mono />}
       {device.role && <Pill text={device.role} />}

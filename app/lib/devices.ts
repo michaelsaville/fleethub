@@ -98,6 +98,9 @@ export interface DeviceRow {
   id: string
   clientName: string
   hostname: string
+  /// Operator-set human-readable label (e.g. "Reception desk · Sarah").
+  /// Searched by /devices q box + Cmd-K palette.
+  friendlyName: string | null
   os: "windows" | "linux" | "darwin" | null
   osVersion: string | null
   role: string | null
@@ -161,6 +164,7 @@ export async function listDevices(filters: DeviceFilters = {}): Promise<DeviceLi
       id: d.id,
       clientName: d.clientName,
       hostname: d.hostname,
+      friendlyName: d.friendlyName ?? null,
       os: (d.os as DeviceRow["os"]) ?? null,
       osVersion: d.osVersion,
       role: d.role,
@@ -181,6 +185,7 @@ export async function listDevices(filters: DeviceFilters = {}): Promise<DeviceLi
     const needle = filters.q.toLowerCase()
     rows = rows.filter((r) =>
       r.hostname.toLowerCase().includes(needle) ||
+      (r.friendlyName ?? "").toLowerCase().includes(needle) ||
       r.clientName.toLowerCase().includes(needle) ||
       (r.ipAddress ?? "").toLowerCase().includes(needle) ||
       (r.role ?? "").toLowerCase().includes(needle),
@@ -211,6 +216,7 @@ export async function getDevice(id: string): Promise<DeviceRow | null> {
     id: live.id,
     clientName: live.clientName,
     hostname: live.hostname,
+    friendlyName: live.friendlyName ?? null,
     os: (live.os as DeviceRow["os"]) ?? null,
     osVersion: live.osVersion,
     role: live.role,

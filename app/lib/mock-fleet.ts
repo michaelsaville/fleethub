@@ -576,6 +576,7 @@ export function getMockDevices(): DeviceRow[] {
     id: s.id,
     clientName: s.clientName,
     hostname: s.hostname,
+    friendlyName: null,
     os: s.os,
     osVersion: s.osVersion,
     role: s.role,

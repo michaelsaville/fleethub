@@ -102,7 +102,7 @@ export default function DeviceTable({ rows }: { rows: DeviceRow[] }) {
           type="search"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search hostname, client, IP, role…"
+          placeholder="Search friendly name, hostname, client, IP, role…"
           style={{
             flex: 1,
             minWidth: "240px",
@@ -172,15 +172,21 @@ export default function DeviceTable({ rows }: { rows: DeviceRow[] }) {
             <tbody>
               {rows.map((r) => {
                 const isSel = selected.has(r.id)
+                const openHref = `/devices/${r.id}`
+                // Row-level click → open device. Checkbox cell, any
+                // <Link>, and the <a> inside the friendly cell call
+                // stopPropagation so they don't double-fire.
                 return (
                   <tr
                     key={r.id}
+                    onClick={() => router.push(openHref)}
                     style={{
                       borderTop: "0.5px solid var(--color-border-tertiary)",
                       background: isSel ? "var(--color-background-tertiary)" : undefined,
+                      cursor: "pointer",
                     }}
                   >
-                    <td style={{ ...tdStyle, paddingRight: 0 }}>
+                    <td style={{ ...tdStyle, paddingRight: 0 }} onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
                         aria-label={`Select ${r.hostname}`}
@@ -190,39 +196,44 @@ export default function DeviceTable({ rows }: { rows: DeviceRow[] }) {
                       />
                     </td>
                     <td style={tdStyle}>
-                      <Link
-                        href={`/devices/${r.id}`}
-                        style={{ color: "var(--color-text-primary)", textDecoration: "none", fontWeight: 500 }}
-                      >
+                      <div style={{ display: "flex", alignItems: "center" }}>
                         <StatusDot
                           tone={r.isOnline ? "ok" : "muted"}
                           label={r.isOnline ? "online" : "offline"}
                           style={{ marginRight: 8 }}
                         />
-                        {r.hostname}
-                      </Link>
-                      {r.noteCount > 0 && (
-                        <Link
-                          href={`/devices/${r.id}`}
-                          title={`${r.noteCount} note${r.noteCount === 1 ? "" : "s"} on this device`}
-                          style={{
-                            marginLeft: 6,
-                            display: "inline-block",
-                            padding: "1px 6px",
-                            background: "var(--color-background-tertiary)",
-                            borderRadius: 999,
-                            fontSize: 10.5,
-                            color: "var(--color-text-secondary)",
-                            textDecoration: "none",
-                          }}
-                        >
-                          📝 {r.noteCount}
-                        </Link>
-                      )}
+                        <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                          <span style={{ color: "var(--color-text-primary)", fontWeight: 500, fontSize: 12.5 }}>
+                            {r.friendlyName ?? r.hostname}
+                          </span>
+                          {r.friendlyName && (
+                            <span style={{ color: "var(--color-text-muted)", fontSize: 10.5, fontFamily: "ui-monospace, SFMono-Regular, monospace", marginTop: 1 }}>
+                              {r.hostname}
+                            </span>
+                          )}
+                        </div>
+                        {r.noteCount > 0 && (
+                          <span
+                            title={`${r.noteCount} note${r.noteCount === 1 ? "" : "s"} on this device`}
+                            style={{
+                              marginLeft: 8,
+                              display: "inline-block",
+                              padding: "1px 6px",
+                              background: "var(--color-background-tertiary)",
+                              borderRadius: 999,
+                              fontSize: 10.5,
+                              color: "var(--color-text-secondary)",
+                            }}
+                          >
+                            📝 {r.noteCount}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td style={tdStyle}>
                       <Link
                         href={`/devices?client=${encodeURIComponent(r.clientName)}`}
+                        onClick={(e) => e.stopPropagation()}
                         style={{ color: "var(--color-text-secondary)", textDecoration: "none" }}
                       >
                         {r.clientName}
@@ -247,6 +258,7 @@ export default function DeviceTable({ rows }: { rows: DeviceRow[] }) {
                       {r.alertCount > 0 ? (
                         <Link
                           href={`/alerts?deviceId=${r.id}&state=open`}
+                          onClick={(e) => e.stopPropagation()}
                           style={alertPillStyle}
                         >
                           {r.alertCount}

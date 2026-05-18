@@ -113,6 +113,12 @@ model Fl_Device {
   /// Cross-app key — matches TH_Client.name.
   clientName    String
   hostname      String
+  /// Operator-set human-readable label. Used to identify the user or
+  /// role at a facility (e.g. "Reception desk · Sarah", "MD office #2",
+  /// "Conference room AV"). Editable on /devices/[id]. Searchable in
+  /// the /devices q box and the Cmd-K palette. Nullable so existing
+  /// rows stay valid.
+  friendlyName  String?
   os            String?   // "windows" | "linux" | "darwin"
   osVersion     String?
   /// Free-form: "DC", "workstation", "server", "laptop". Set by tech.

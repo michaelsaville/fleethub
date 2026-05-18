@@ -120,6 +120,7 @@ async function searchDevices(q: string): Promise<PaletteResult[]> {
     const needle = q.toLowerCase()
     const matched = getMockDevices().filter((d) =>
       d.hostname.toLowerCase().includes(needle) ||
+      (d.friendlyName ?? "").toLowerCase().includes(needle) ||
       d.clientName.toLowerCase().includes(needle) ||
       (d.ipAddress ?? "").toLowerCase().includes(needle) ||
       (d.role ?? "").toLowerCase().includes(needle),
@@ -127,8 +128,8 @@ async function searchDevices(q: string): Promise<PaletteResult[]> {
     return matched.map((d) => ({
       id: `device:${d.id}`,
       category: "Entities" as const,
-      label: d.hostname,
-      hint: [d.clientName, d.role ?? d.os, d.isOnline ? "online" : "offline"]
+      label: d.friendlyName ?? d.hostname,
+      hint: [d.friendlyName ? d.hostname : null, d.clientName, d.role ?? d.os, d.isOnline ? "online" : "offline"]
         .filter(Boolean)
         .join(" · "),
       href: `/devices/${d.id}`,
@@ -140,6 +141,7 @@ async function searchDevices(q: string): Promise<PaletteResult[]> {
       isActive: true,
       OR: [
         { hostname: { contains: q, mode: "insensitive" } },
+        { friendlyName: { contains: q, mode: "insensitive" } },
         { clientName: { contains: q, mode: "insensitive" } },
         { ipAddress: { contains: q, mode: "insensitive" } },
         { role: { contains: q, mode: "insensitive" } },
@@ -150,6 +152,7 @@ async function searchDevices(q: string): Promise<PaletteResult[]> {
     select: {
       id: true,
       hostname: true,
+      friendlyName: true,
       clientName: true,
       isOnline: true,
       os: true,
@@ -159,8 +162,8 @@ async function searchDevices(q: string): Promise<PaletteResult[]> {
   return rows.map((d) => ({
     id: `device:${d.id}`,
     category: "Entities" as const,
-    label: d.hostname,
-    hint: [d.clientName, d.role ?? d.os, d.isOnline ? "online" : "offline"]
+    label: d.friendlyName ?? d.hostname,
+    hint: [d.friendlyName ? d.hostname : null, d.clientName, d.role ?? d.os, d.isOnline ? "online" : "offline"]
       .filter(Boolean)
       .join(" · "),
     href: `/devices/${d.id}`,
