@@ -103,3 +103,11 @@ button {
     padding-right: 12px !important;
   }
 }
+
+/* Phase 9 WS-E §7.3 — shimmer for SkeletonBar / SkeletonCard.
+   Used by app/(protected)/loading.tsx + per-segment overrides.
+   Keep duration in sync with the inline animation: prop. */
+@keyframes fl-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}

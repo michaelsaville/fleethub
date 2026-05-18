@@ -45,7 +45,7 @@ const FILTERS = [
   { key: "running", label: "Running", color: "var(--color-accent)" },
   { key: "pending", label: "Pending", color: "var(--color-text-muted)" },
   { key: "succeeded", label: "Done", color: "var(--color-success)" },
-  { key: "reboot-deferred", label: "Reboot deferred", color: "var(--color-warn)" },
+  { key: "reboot-deferred", label: "Reboot deferred", color: "var(--color-warning)" },
 ] as const
 
 export default function DeploymentMonitor({
@@ -196,7 +196,7 @@ function TargetRowCard({
     : succeeded
       ? "var(--color-success)"
       : row.status === "reboot-deferred"
-        ? "var(--color-warn)"
+        ? "var(--color-warning)"
         : running
           ? "var(--color-accent)"
           : "var(--color-text-muted)"
@@ -273,7 +273,7 @@ function TargetRowCard({
               <button onClick={() => onSimulate("no-op")} style={simBtn("var(--color-text-muted)")} disabled={busyToken !== null}>no-op</button>
               <button onClick={() => onSimulate("fail-disk")} style={simBtn("var(--color-danger)")} disabled={busyToken !== null}>fail-disk</button>
               <button onClick={() => onSimulate("fail-policy")} style={simBtn("var(--color-danger)")} disabled={busyToken !== null}>fail-policy</button>
-              <button onClick={() => onSimulate("reboot-deferred")} style={simBtn("var(--color-warn)")} disabled={busyToken !== null}>reboot-deferred</button>
+              <button onClick={() => onSimulate("reboot-deferred")} style={simBtn("var(--color-warning)")} disabled={busyToken !== null}>reboot-deferred</button>
             </div>
           </details>
         )}

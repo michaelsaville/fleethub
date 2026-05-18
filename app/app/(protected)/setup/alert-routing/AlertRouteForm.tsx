@@ -5,6 +5,7 @@ import Link from "next/link"
 import { FIELD, TYPOGRAPHY, CARD } from "@/lib/ui-tokens"
 import { Button } from "@/components/ui/Button"
 import { ConfirmModal } from "@/components/ui/ConfirmModal"
+import { InlineAlert } from "@/components/ui/InlineAlert"
 
 // Phase 7 Workstream A step 3 — shared editor for create + edit.
 // No client-side state machine beyond local form state; all
@@ -348,11 +349,7 @@ export default function AlertRouteForm({
         </Field>
       </Section>
 
-      {error && (
-        <div style={{ padding: "8px 10px", fontSize: 12, color: "var(--color-danger, #b91c1c)", background: "var(--color-danger-soft, rgba(239, 68, 68, 0.1))", borderRadius: 6 }}>
-          {error}
-        </div>
-      )}
+      {error && <InlineAlert tone="danger">{error}</InlineAlert>}
 
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
         {isEdit && (

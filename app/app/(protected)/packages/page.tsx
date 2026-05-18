@@ -104,7 +104,7 @@ export default async function PackagesPage() {
                       {p.isApproved ? (
                         <span style={{ color: "var(--color-success)", fontWeight: 600 }}>✓</span>
                       ) : (
-                        <span style={{ color: "var(--color-warn)" }}>pending</span>
+                        <span style={{ color: "var(--color-warning)" }}>pending</span>
                       )}
                     </td>
                   </tr>

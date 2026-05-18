@@ -1130,7 +1130,7 @@ function PostureRow({
 }) {
   const palette: Record<typeof tone, { bg: string; fg: string }> = {
     ok:      { bg: "rgba(16, 185, 129, 0.15)", fg: "var(--color-success, #059669)" },
-    warn:    { bg: "rgba(245, 158, 11, 0.15)", fg: "var(--color-warn, #d97706)" },
+    warn:    { bg: "rgba(245, 158, 11, 0.15)", fg: "var(--color-warning, #d97706)" },
     bad:     { bg: "rgba(220, 38, 38, 0.15)",  fg: "var(--color-danger, #b91c1c)" },
     neutral: { bg: "rgba(148, 163, 184, 0.15)", fg: "var(--color-text-muted)" },
   }

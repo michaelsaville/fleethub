@@ -64,8 +64,8 @@ export default function MaintenanceModeButton({
             fontSize: 12,
             fontWeight: 600,
             borderRadius: 6,
-            border: "0.5px solid var(--color-warn)",
-            background: "var(--color-warn)",
+            border: "0.5px solid var(--color-warning)",
+            background: "var(--color-warning)",
             color: "#fff",
             cursor: "pointer",
           }}
@@ -137,7 +137,7 @@ export default function MaintenanceModeButton({
         <button onClick={() => setOpen(false)} disabled={busy} style={{ fontSize: 11, padding: "5px 10px", borderRadius: 4, background: "transparent", border: "0.5px solid var(--color-border-tertiary)", color: "var(--color-text-secondary)", cursor: "pointer" }}>
           Cancel
         </button>
-        <button onClick={() => call(true, draftUntil || undefined, draftReason || undefined)} disabled={busy} style={{ fontSize: 11, padding: "5px 10px", borderRadius: 4, background: "var(--color-warn)", border: "0.5px solid var(--color-warn)", color: "#fff", cursor: "pointer", fontWeight: 600 }}>
+        <button onClick={() => call(true, draftUntil || undefined, draftReason || undefined)} disabled={busy} style={{ fontSize: 11, padding: "5px 10px", borderRadius: 4, background: "var(--color-warning)", border: "0.5px solid var(--color-warning)", color: "#fff", cursor: "pointer", fontWeight: 600 }}>
           {busy ? "Setting…" : "Set maintenance"}
         </button>
       </div>

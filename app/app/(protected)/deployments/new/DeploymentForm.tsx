@@ -202,7 +202,7 @@ export default function DeploymentForm({
           </button>
         </div>
         {droppedToMaintenance > 0 && (
-          <p style={{ fontSize: 11, color: "var(--color-warn)", marginBottom: 8 }}>
+          <p style={{ fontSize: 11, color: "var(--color-warning)", marginBottom: 8 }}>
             ⚠ {droppedToMaintenance} selected host{droppedToMaintenance === 1 ? " is" : "s are"} in Maintenance Mode and will be skipped.
           </p>
         )}
@@ -235,7 +235,7 @@ export default function DeploymentForm({
                   <td style={td()}>{d.os ?? "—"}</td>
                   <td style={td()}>{d.role ?? "—"}</td>
                   <td style={td()}>
-                    {d.maintenanceMode && <span style={{ color: "var(--color-warn)", fontWeight: 600 }}>🔒 maintenance</span>}
+                    {d.maintenanceMode && <span style={{ color: "var(--color-warning)", fontWeight: 600 }}>🔒 maintenance</span>}
                     {!d.maintenanceMode && d.isOnline && <span style={{ color: "var(--color-success)" }}>online</span>}
                     {!d.maintenanceMode && !d.isOnline && <span style={{ color: "var(--color-text-muted)" }}>offline</span>}
                   </td>

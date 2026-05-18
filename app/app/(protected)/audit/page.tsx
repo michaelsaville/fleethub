@@ -1,6 +1,7 @@
 import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import { Card as UICard, CardHeader } from "@/components/ui/Card"
+import { FIELD } from "@/lib/ui-tokens"
 import { listAuditEvents } from "@/lib/audit-events"
 import type { AuditEventRow } from "@/lib/audit-events"
 import { requireSession } from "@/lib/authz"
@@ -138,7 +139,7 @@ function FilterBar({
           list="audit-actors"
           defaultValue={filters.actorEmail ?? ""}
           placeholder="user@…"
-          style={inputStyle}
+          style={FIELD}
         />
         <datalist id="audit-actors">
           {actors.map((a) => <option key={a} value={a} />)}
@@ -151,14 +152,14 @@ function FilterBar({
           list="audit-actions"
           defaultValue={filters.action ?? ""}
           placeholder="e.g. agent. or auth.signin"
-          style={inputStyle}
+          style={FIELD}
         />
         <datalist id="audit-actions">
           {actions.map((a) => <option key={a} value={a} />)}
         </datalist>
       </Field>
       <Field label="Outcome">
-        <select name="outcome" defaultValue={filters.outcome ?? "all"} style={inputStyle}>
+        <select name="outcome" defaultValue={filters.outcome ?? "all"} style={FIELD}>
           <option value="all">All</option>
           <option value="ok">ok</option>
           <option value="error">error</option>
@@ -166,16 +167,16 @@ function FilterBar({
         </select>
       </Field>
       <Field label="Client">
-        <input name="client" type="text" defaultValue={filters.clientName ?? ""} placeholder="TH_Client.name" style={inputStyle} />
+        <input name="client" type="text" defaultValue={filters.clientName ?? ""} placeholder="TH_Client.name" style={FIELD} />
       </Field>
       <Field label="Device ID">
-        <input name="device" type="text" defaultValue={filters.deviceId ?? ""} placeholder="Fl_Device.id" style={inputStyle} />
+        <input name="device" type="text" defaultValue={filters.deviceId ?? ""} placeholder="Fl_Device.id" style={FIELD} />
       </Field>
       <Field label="From">
-        <input name="from" type="datetime-local" defaultValue={toLocalInput(filters.fromIso)} style={inputStyle} />
+        <input name="from" type="datetime-local" defaultValue={toLocalInput(filters.fromIso)} style={FIELD} />
       </Field>
       <Field label="To">
-        <input name="to" type="datetime-local" defaultValue={toLocalInput(filters.toIso)} style={inputStyle} />
+        <input name="to" type="datetime-local" defaultValue={toLocalInput(filters.toIso)} style={FIELD} />
       </Field>
       <div style={{ display: "flex", alignItems: "flex-end", gap: "8px" }}>
         <button type="submit" style={btnPrimary}>Apply</button>
@@ -323,14 +324,6 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div style={{ fontSize: "12.5px", color: "var(--color-text-muted)", lineHeight: 1.55 }}>{children}</div>
 }
 
-const inputStyle: React.CSSProperties = {
-  fontSize: "12px",
-  padding: "5px 8px",
-  background: "var(--color-background-tertiary)",
-  border: "0.5px solid var(--color-border-tertiary)",
-  borderRadius: "6px",
-  color: "var(--color-text-primary)",
-}
 
 const btnPrimary: React.CSSProperties = {
   fontSize: "12px",

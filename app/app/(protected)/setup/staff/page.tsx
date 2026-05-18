@@ -2,6 +2,7 @@ import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import { prisma } from "@/lib/prisma"
 import { requireAdmin } from "@/lib/authz"
+import { FIELD } from "@/lib/ui-tokens"
 import { addStaff, updateStaffRole, toggleStaffActive } from "./actions"
 
 export const dynamic = "force-dynamic"
@@ -48,13 +49,13 @@ export default async function StaffPage() {
             }}
           >
             <Field label="Email">
-              <input type="email" name="email" required placeholder="user@pcc2k.com" style={inputStyle} />
+              <input type="email" name="email" required placeholder="user@pcc2k.com" style={{ ...FIELD, width: "100%" }} />
             </Field>
             <Field label="Name">
-              <input type="text" name="name" placeholder="Optional" style={inputStyle} />
+              <input type="text" name="name" placeholder="Optional" style={{ ...FIELD, width: "100%" }} />
             </Field>
             <Field label="Role">
-              <select name="role" defaultValue="TECH" style={inputStyle}>
+              <select name="role" defaultValue="TECH" style={{ ...FIELD, width: "100%" }}>
                 {ROLES.map((r) => (
                   <option key={r} value={r}>{r}</option>
                 ))}
@@ -114,7 +115,7 @@ export default async function StaffPage() {
                         <select
                           name="role"
                           defaultValue={r.role}
-                          style={{ ...inputStyle, padding: "4px 6px", fontSize: "12px", width: "auto" }}
+                          style={{ ...FIELD, padding: "4px 6px", fontSize: "12px", width: "auto" }}
                           disabled={isSelf && r.role === "ADMIN"}
                           title={isSelf && r.role === "ADMIN" ? "You can't demote your own ADMIN role" : undefined}
                         >
@@ -187,16 +188,6 @@ const sectionLabelStyle: React.CSSProperties = {
   marginBottom: "10px",
 }
 
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  background: "var(--color-background-tertiary)",
-  border: "0.5px solid var(--color-border-secondary)",
-  borderRadius: "6px",
-  padding: "6px 10px",
-  color: "var(--color-text-primary)",
-  fontSize: "13px",
-  fontFamily: "inherit",
-}
 
 const primaryButtonStyle: React.CSSProperties = {
   padding: "7px 16px",

@@ -136,7 +136,7 @@ export default function RunScriptForm({
                   <td style={td()}>{d.clientName}</td>
                   <td style={td()}>{d.os ?? "—"}</td>
                   <td style={td()}>
-                    {d.maintenanceMode && <span style={{ color: "var(--color-warn)", fontWeight: 600 }}>🔒 maintenance</span>}
+                    {d.maintenanceMode && <span style={{ color: "var(--color-warning)", fontWeight: 600 }}>🔒 maintenance</span>}
                     {!d.maintenanceMode && d.isOnline && <span style={{ color: "var(--color-success)" }}>online</span>}
                     {!d.maintenanceMode && !d.isOnline && <span style={{ color: "var(--color-text-muted)" }}>offline</span>}
                   </td>
@@ -161,14 +161,14 @@ export default function RunScriptForm({
           <span>
             Dry run
             {!script.dryRunCapable && (
-              <span style={{ color: "var(--color-warn)", fontSize: 11, marginLeft: 8 }}>
+              <span style={{ color: "var(--color-warning)", fontSize: 11, marginLeft: 8 }}>
                 (script not dry-run capable — will run in apply mode)
               </span>
             )}
           </span>
         </label>
         {!dryRun && (
-          <p style={{ fontSize: 11, color: "var(--color-warn)", marginTop: 4 }}>
+          <p style={{ fontSize: 11, color: "var(--color-warning)", marginTop: 4 }}>
             ⚠ Apply mode — script will execute against the target. The submit button will require an extra click to confirm.
           </p>
         )}
@@ -200,7 +200,7 @@ export default function RunScriptForm({
 
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
         {confirmingApply && (
-          <span style={{ fontSize: 12, color: "var(--color-warn)", fontWeight: 600, marginRight: 6 }}>
+          <span style={{ fontSize: 12, color: "var(--color-warning)", fontWeight: 600, marginRight: 6 }}>
             Click again to confirm apply →
           </span>
         )}

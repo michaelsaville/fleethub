@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { ConfirmModal } from "@/components/ui/ConfirmModal"
+import { FIELD } from "@/lib/ui-tokens"
 
 interface ScheduleRow {
   id: string
@@ -135,24 +136,24 @@ export default function ScheduledReportsClient({
 
           <div style={fieldGrid}>
             <Field label="Tenant">
-              <select value={tenantName} onChange={(e) => setTenantName(e.target.value)} style={inputStyle}>
+              <select value={tenantName} onChange={(e) => setTenantName(e.target.value)} style={FIELD}>
                 {tenants.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
             </Field>
             <Field label="Kind">
-              <select value={kind} onChange={(e) => setKind(e.target.value)} style={inputStyle}>
+              <select value={kind} onChange={(e) => setKind(e.target.value)} style={FIELD}>
                 {KIND_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             </Field>
             <Field label="Audience">
-              <select value={audience} onChange={(e) => setAudience(e.target.value as "client" | "tech" | "auditor")} style={inputStyle}>
+              <select value={audience} onChange={(e) => setAudience(e.target.value as "client" | "tech" | "auditor")} style={FIELD}>
                 <option value="client">Client</option>
                 <option value="tech">Tech</option>
                 <option value="auditor">Auditor</option>
               </select>
             </Field>
             <Field label="Date range">
-              <select value={dateRange} onChange={(e) => setDateRange(e.target.value as (typeof DATE_RANGE_OPTIONS)[number])} style={inputStyle}>
+              <select value={dateRange} onChange={(e) => setDateRange(e.target.value as (typeof DATE_RANGE_OPTIONS)[number])} style={FIELD}>
                 {DATE_RANGE_OPTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
               </select>
             </Field>
@@ -164,7 +165,7 @@ export default function ScheduledReportsClient({
                 value={cron}
                 onChange={(e) => setCron(e.target.value)}
                 placeholder="e.g. 0 8 * * 1"
-                style={{ ...inputStyle, fontFamily: "ui-monospace, SFMono-Regular, monospace" }}
+                style={{ ...FIELD, fontFamily: "ui-monospace, SFMono-Regular, monospace" }}
               />
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {CRON_PRESETS.map((p) => (
@@ -183,7 +184,7 @@ export default function ScheduledReportsClient({
           </Field>
 
           <Field label="Timezone">
-            <input value={timezone} onChange={(e) => setTimezone(e.target.value)} style={inputStyle} />
+            <input value={timezone} onChange={(e) => setTimezone(e.target.value)} style={FIELD} />
           </Field>
 
           <Field label="Email recipients (To)">
@@ -191,7 +192,7 @@ export default function ScheduledReportsClient({
               value={emailTo}
               onChange={(e) => setEmailTo(e.target.value)}
               placeholder="alice@example.com, bob@example.com (optional)"
-              style={inputStyle}
+              style={FIELD}
             />
           </Field>
           <Field label="Email recipients (Cc)">
@@ -199,7 +200,7 @@ export default function ScheduledReportsClient({
               value={emailCc}
               onChange={(e) => setEmailCc(e.target.value)}
               placeholder="optional"
-              style={inputStyle}
+              style={FIELD}
             />
           </Field>
 
@@ -208,7 +209,7 @@ export default function ScheduledReportsClient({
               value={slackWebhookUrl}
               onChange={(e) => setSlackWebhookUrl(e.target.value)}
               placeholder="https://hooks.slack.com/services/... (optional)"
-              style={inputStyle}
+              style={FIELD}
             />
           </Field>
           <Field label="Teams incoming webhook URL">
@@ -216,7 +217,7 @@ export default function ScheduledReportsClient({
               value={teamsWebhookUrl}
               onChange={(e) => setTeamsWebhookUrl(e.target.value)}
               placeholder="https://<tenant>.webhook.office.com/... (optional)"
-              style={inputStyle}
+              style={FIELD}
             />
           </Field>
           <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: -4 }}>
@@ -380,14 +381,6 @@ const fieldGrid: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
   gap: 10,
-}
-const inputStyle: React.CSSProperties = {
-  fontSize: 13,
-  padding: "7px 10px",
-  borderRadius: 6,
-  border: "0.5px solid var(--color-border-tertiary)",
-  background: "var(--color-background-primary)",
-  color: "var(--color-text-primary)",
 }
 const primaryBtn: React.CSSProperties = {
   fontSize: 12,

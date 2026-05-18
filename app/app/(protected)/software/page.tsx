@@ -171,7 +171,7 @@ async function DriftTab() {
                   </span>
                 </td>
                 <td style={td()}>
-                  <span style={{ color: d.outdatedDeviceIds.length > 0 ? "var(--color-warn)" : "var(--color-text-muted)", fontWeight: 600 }}>
+                  <span style={{ color: d.outdatedDeviceIds.length > 0 ? "var(--color-warning)" : "var(--color-text-muted)", fontWeight: 600 }}>
                     {d.outdatedDeviceIds.length}
                   </span>
                 </td>

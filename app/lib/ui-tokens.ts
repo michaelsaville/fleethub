@@ -161,3 +161,17 @@ export const TONE = {
 } as const
 
 export type Tone = keyof typeof TONE
+
+/** Phase 9 WS-E §7.5 — severity-named alias for TONE used by
+ *  detail-page severity pills. Same colors, more semantic names. */
+export const TONE_PALETTE = {
+  critical: TONE.bad,
+  warn:     TONE.warn,
+  info:     TONE.accent,
+  ok:       TONE.ok,
+  bad:      TONE.bad,
+  kev:      TONE.kev,
+  neutral:  TONE.neutral,
+} as const
+
+export type Severity = keyof typeof TONE_PALETTE

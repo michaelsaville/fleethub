@@ -5,6 +5,7 @@ import Link from "next/link"
 import { FIELD_SM, TYPOGRAPHY, CARD } from "@/lib/ui-tokens"
 import { Button } from "@/components/ui/Button"
 import { ConfirmModal } from "@/components/ui/ConfirmModal"
+import { InlineAlert } from "@/components/ui/InlineAlert"
 
 // Phase 7 Workstream A step 8 — shared editor for on-call schedules.
 // Rotation grid: pick a user + days + start/end (UTC HH:MM).
@@ -219,11 +220,7 @@ export default function OncallScheduleForm({
         </label>
       </Section>
 
-      {error && (
-        <div style={{ padding: "8px 10px", fontSize: 12, color: "var(--color-danger, #b91c1c)", background: "var(--color-danger-soft, rgba(239, 68, 68, 0.1))", borderRadius: 6 }}>
-          {error}
-        </div>
-      )}
+      {error && <InlineAlert tone="danger">{error}</InlineAlert>}
 
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
         {isEdit && (

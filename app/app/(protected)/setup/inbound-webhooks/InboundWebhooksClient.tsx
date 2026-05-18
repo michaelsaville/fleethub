@@ -4,6 +4,7 @@ import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { Chip } from "@/components/ui/Chip"
 import { ConfirmModal } from "@/components/ui/ConfirmModal"
+import { FIELD } from "@/lib/ui-tokens"
 
 interface WebhookRow {
   id: string
@@ -308,16 +309,16 @@ function NewWebhookForm({ sources, tenants }: { sources: string[]; tenants: stri
             placeholder='e.g. "Acme UptimeRobot"'
             required
             maxLength={120}
-            style={inputStyle}
+            style={{ ...FIELD, width: "100%" }}
           />
         </Field>
         <Field label="Source">
-          <select value={source} onChange={(e) => setSource(e.target.value)} style={inputStyle}>
+          <select value={source} onChange={(e) => setSource(e.target.value)} style={{ ...FIELD, width: "100%" }}>
             {sources.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
         </Field>
         <Field label="Tenant">
-          <select value={tenantName} onChange={(e) => setTenantName(e.target.value)} required style={inputStyle}>
+          <select value={tenantName} onChange={(e) => setTenantName(e.target.value)} required style={{ ...FIELD, width: "100%" }}>
             <option value="">(pick one)</option>
             {tenants.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
@@ -329,7 +330,7 @@ function NewWebhookForm({ sources, tenants }: { sources: string[]; tenants: stri
           onChange={(e) => setConfigJson(e.target.value)}
           rows={3}
           placeholder='{"hmacSecret":"..."} for sentry · {"allowBatch":true} for generic · etc.'
-          style={{ ...inputStyle, fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 12 }}
+          style={{ ...FIELD, width: "100%", fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 12 }}
         />
       </Field>
       {error && (
@@ -394,15 +395,6 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 1) + "…"
 }
 
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "6px 10px",
-  fontSize: 13,
-  borderRadius: 5,
-  background: "var(--color-background-tertiary)",
-  border: "0.5px solid var(--color-border-secondary)",
-  color: "var(--color-text-primary)",
-}
 const tinyBtn: React.CSSProperties = {
   padding: "4px 10px",
   fontSize: 11,

@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic"
 const STATUS_COLORS: Record<string, string> = {
   queued: "var(--color-text-muted)",
   running: "var(--color-accent)",
-  paused: "var(--color-warn)",
+  paused: "var(--color-warning)",
   "auto-paused": "var(--color-danger)",
   completed: "var(--color-success)",
   aborted: "var(--color-text-muted)",

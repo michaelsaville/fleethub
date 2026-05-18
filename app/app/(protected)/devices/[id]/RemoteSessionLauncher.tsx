@@ -1,6 +1,7 @@
 "use client"
 import { useState } from "react"
 import { useRouter } from "next/navigation"
+import { InlineAlert } from "@/components/ui/InlineAlert"
 
 // Phase 7 Workstream C step 3 — Remote in button + justification
 // modal. Calls the openRemoteSession server action via a fetch to
@@ -164,11 +165,7 @@ export default function RemoteSessionLauncher({
                 }}
               />
             </label>
-            {error && (
-              <div style={{ padding: "6px 10px", fontSize: 12, color: "var(--color-danger, #b91c1c)", background: "var(--color-danger-soft, rgba(239, 68, 68, 0.1))", borderRadius: 6 }}>
-                {error}
-              </div>
-            )}
+            {error && <InlineAlert tone="danger">{error}</InlineAlert>}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button type="button" onClick={() => setModalOpen(false)} disabled={submitting} style={{ padding: "8px 14px", fontSize: 13, color: "var(--color-text-secondary)", background: "transparent", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 6, cursor: submitting ? "not-allowed" : "pointer" }}>
                 Cancel

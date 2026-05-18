@@ -1,4 +1,5 @@
 import type { Fl_Script } from "@prisma/client"
+import { FIELD } from "@/lib/ui-tokens"
 
 interface ScriptFormProps {
   action: (formData: FormData) => void | Promise<void>
@@ -23,11 +24,11 @@ export function ScriptForm({ action, submitLabel, script, readOnly }: ScriptForm
             defaultValue={script?.name ?? ""}
             disabled={readOnly}
             placeholder="CleanTempFiles"
-            style={inputStyle}
+            style={{ ...FIELD, width: "100%" }}
           />
         </Field>
         <Field label="Shell" required>
-          <select name="shell" defaultValue={script?.shell ?? "powershell"} disabled={readOnly} style={inputStyle}>
+          <select name="shell" defaultValue={script?.shell ?? "powershell"} disabled={readOnly} style={{ ...FIELD, width: "100%" }}>
             {SHELLS.map((s) => (
               <option key={s} value={s}>{s}</option>
             ))}
@@ -40,7 +41,7 @@ export function ScriptForm({ action, submitLabel, script, readOnly }: ScriptForm
             defaultValue={script?.category ?? ""}
             disabled={readOnly}
             placeholder="maintenance"
-            style={inputStyle}
+            style={{ ...FIELD, width: "100%" }}
           />
         </Field>
       </div>
@@ -52,7 +53,7 @@ export function ScriptForm({ action, submitLabel, script, readOnly }: ScriptForm
           defaultValue={script?.description ?? ""}
           disabled={readOnly}
           placeholder="One-line summary shown in the library"
-          style={inputStyle}
+          style={{ ...FIELD, width: "100%" }}
         />
       </Field>
 
@@ -65,7 +66,8 @@ export function ScriptForm({ action, submitLabel, script, readOnly }: ScriptForm
           rows={18}
           spellCheck={false}
           style={{
-            ...inputStyle,
+            ...FIELD,
+            width: "100%",
             fontFamily: "ui-monospace, SFMono-Regular, monospace",
             fontSize: "12px",
             lineHeight: 1.5,
@@ -100,16 +102,6 @@ function Field({ label, required, children }: { label: string; required?: boolea
   )
 }
 
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  background: "var(--color-background-tertiary)",
-  border: "0.5px solid var(--color-border-secondary)",
-  borderRadius: "6px",
-  padding: "7px 10px",
-  color: "var(--color-text-primary)",
-  fontSize: "13px",
-  fontFamily: "inherit",
-}
 
 const primaryButtonStyle: React.CSSProperties = {
   padding: "7px 16px",

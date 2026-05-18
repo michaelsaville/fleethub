@@ -62,7 +62,7 @@ export default async function DeploymentDetailPage({
               {snap.deployment.startedAt ? new Date(snap.deployment.startedAt).toLocaleString() : "—"} by{" "}
               {snap.deployment.requestedBy.split("@")[0]}
               {snap.deployment.dryRun && (
-                <span style={{ marginLeft: 12, padding: "2px 8px", borderRadius: 4, background: "var(--color-warn)", color: "#fff", fontSize: 11, fontWeight: 600 }}>
+                <span style={{ marginLeft: 12, padding: "2px 8px", borderRadius: 4, background: "var(--color-warning)", color: "#fff", fontSize: 11, fontWeight: 600 }}>
                   DRY-RUN
                 </span>
               )}
@@ -76,7 +76,7 @@ export default async function DeploymentDetailPage({
         {isPaused && (
           <div style={{
             padding: "12px 16px",
-            background: snap.deployment.status === "auto-paused" ? "var(--color-danger)" : "var(--color-warn)",
+            background: snap.deployment.status === "auto-paused" ? "var(--color-danger)" : "var(--color-warning)",
             color: "#fff",
             borderRadius: 8,
             fontSize: 13,

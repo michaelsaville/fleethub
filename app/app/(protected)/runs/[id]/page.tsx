@@ -13,7 +13,7 @@ const STATE_COLOR: Record<string, string> = {
   ok: "var(--color-success)",
   dryrun: "var(--color-success)",
   error: "var(--color-danger)",
-  timeout: "var(--color-warn)",
+  timeout: "var(--color-warning)",
   cancelled: "var(--color-text-muted)",
   rejected: "var(--color-danger)",
 }
@@ -59,7 +59,7 @@ export default async function RunDetailPage({
               ) : "(unknown host)"}
               {device && <> · {device.clientName} · {device.os}</>}
               {run.dryRun && (
-                <span style={{ marginLeft: 12, padding: "2px 8px", borderRadius: 4, background: "var(--color-warn)", color: "#fff", fontSize: 11, fontWeight: 600 }}>
+                <span style={{ marginLeft: 12, padding: "2px 8px", borderRadius: 4, background: "var(--color-warning)", color: "#fff", fontSize: 11, fontWeight: 600 }}>
                   DRY-RUN
                 </span>
               )}

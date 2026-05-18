@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
+import { FIELD } from "@/lib/ui-tokens"
 
 const REPORT_KINDS: Array<{ value: string; label: string; help: string }> = [
   {
@@ -80,7 +81,7 @@ export default function NewReportForm({ tenants }: { tenants: string[] }) {
       }}
     >
       <Field label="Tenant">
-        <select value={tenantName} onChange={(e) => setTenantName(e.target.value)} style={inputStyle}>
+        <select value={tenantName} onChange={(e) => setTenantName(e.target.value)} style={FIELD}>
           {tenants.length === 0 && <option value="">(no tenants enrolled)</option>}
           {tenants.map((t) => (
             <option key={t} value={t}>
@@ -127,7 +128,7 @@ export default function NewReportForm({ tenants }: { tenants: string[] }) {
         <select
           value={audience}
           onChange={(e) => setAudience(e.target.value as "client" | "tech" | "auditor")}
-          style={inputStyle}
+          style={FIELD}
         >
           <option value="client">Client (executive summary)</option>
           <option value="tech">Tech (full detail)</option>
@@ -139,7 +140,7 @@ export default function NewReportForm({ tenants }: { tenants: string[] }) {
         <select
           value={format}
           onChange={(e) => setFormat(e.target.value as "pdf" | "evidence-zip")}
-          style={inputStyle}
+          style={FIELD}
         >
           <option value="pdf">PDF only</option>
           <option value="evidence-zip">Evidence ZIP (PDF + CSVs + audit-chain proof + manifest)</option>
@@ -202,11 +203,3 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-const inputStyle: React.CSSProperties = {
-  fontSize: 13,
-  padding: "7px 10px",
-  borderRadius: 6,
-  border: "0.5px solid var(--color-border-tertiary)",
-  background: "var(--color-background-primary)",
-  color: "var(--color-text-primary)",
-}
