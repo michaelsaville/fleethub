@@ -55,9 +55,26 @@ export const authOptions: NextAuthOptions = {
           if (staff) {
             token.id = staff.id
             token.role = staff.role
+            // Phase 10 WS-E — encode the MFA-gate inputs into the
+            // JWT so middleware doesn't need a DB hit per request.
+            ;(token as { totpEnabledAt?: string | null }).totpEnabledAt =
+              staff.totpEnabledAt ? staff.totpEnabledAt.toISOString() : null
           }
         } catch (e) {
           console.error("FleetHub JWT error:", String(e))
+        }
+
+        // Phase 10 WS-E — tenant.mfaRequired is org-wide for v1:
+        // any tenant flipping the flag forces every user. We don't
+        // bind users to tenants today, so OR across all tenants.
+        try {
+          const anyTenantRequires = await prisma.fl_Tenant.findFirst({
+            where: { mfaRequired: true },
+            select: { id: true },
+          })
+          ;(token as { tenantMfaRequired?: boolean }).tenantMfaRequired = !!anyTenantRequires
+        } catch (e) {
+          console.error("FleetHub JWT mfaRequired lookup error:", String(e))
         }
       }
       return token
