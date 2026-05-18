@@ -1,9 +1,12 @@
-import Link from "next/link"
 import AppShell from "@/components/AppShell"
 import DeviceTable from "@/components/DeviceTable"
 import SeedBanner from "@/components/SeedBanner"
-import { Card } from "@/components/ui/Card"
 import { listDevices } from "@/lib/devices"
+import { getDeviceViews } from "@/lib/device-views"
+import type { ViewFilters, ViewSort } from "@/lib/device-view-types"
+import { getSessionContext } from "@/lib/authz"
+import { ViewSelector } from "./ViewSelector"
+import ColumnsMenu from "./ColumnsMenu"
 
 export const dynamic = "force-dynamic"
 
@@ -13,7 +16,13 @@ type RawSearchParams = {
   os?: string
   online?: string
   role?: string
+  hasAlerts?: string
+  maintenance?: string
+  enrolled?: string
   sort?: string
+  sortField?: string
+  sortDir?: string
+  view?: string
 }
 
 export default async function DevicesPage({
@@ -22,18 +31,61 @@ export default async function DevicesPage({
   searchParams: Promise<RawSearchParams>
 }) {
   const sp = await searchParams
-  const filters = {
-    q: sp.q?.trim() || undefined,
-    client: sp.client || undefined,
-    os: ["windows", "linux", "darwin"].includes(sp.os ?? "") ? (sp.os as "windows" | "linux" | "darwin") : undefined,
-    online: (sp.online === "online" || sp.online === "offline" ? sp.online : undefined) as "online" | "offline" | undefined,
-    role: sp.role || undefined,
-    sort: ["lastSeen", "hostname", "alerts"].includes(sp.sort ?? "") ? (sp.sort as "lastSeen" | "hostname" | "alerts") : undefined,
-  }
-  const { rows, totalBeforeFilter, isMock, facets } = await listDevices(filters)
+  const [ctx, viewBundle] = await Promise.all([
+    getSessionContext(),
+    getDeviceViews(),
+  ])
+  const { views, defaultViewId, hiddenColumns } = viewBundle
 
-  const filtersActive =
-    !!filters.q || !!filters.client || !!filters.os || !!filters.online || !!filters.role
+  // Resolve active view: ?view= URL > defaultViewId > first SYSTEM
+  const activeView =
+    views.find((v) => v.id === sp.view) ??
+    views.find((v) => v.id === defaultViewId) ??
+    views.find((v) => v.visibility === "SYSTEM") ??
+    null
+
+  // Build effective filters = view.filters with URL overrides on top.
+  // Comma-separated arrays for os / role per the same convention TH uses.
+  const overrideOs = parseOsList(sp.os)
+  const overrideRole = parseList(sp.role)
+  const effectiveFilters: ViewFilters = {
+    ...(activeView?.filters ?? {}),
+    ...(sp.q?.trim() ? { q: sp.q.trim() } : {}),
+    ...(sp.client ? { client: sp.client } : {}),
+    ...(overrideOs ? { os: overrideOs } : {}),
+    ...(sp.online === "online" || sp.online === "offline" ? { online: sp.online } : {}),
+    ...(overrideRole ? { role: overrideRole } : {}),
+    ...(sp.hasAlerts === "true" ? { hasAlerts: true } : sp.hasAlerts === "false" ? { hasAlerts: false } : {}),
+    ...(sp.maintenance === "on" || sp.maintenance === "off" ? { maintenance: sp.maintenance } : {}),
+    ...(sp.enrolled === "yes" || sp.enrolled === "no" ? { enrolled: sp.enrolled } : {}),
+  }
+  const effectiveSort: ViewSort | null = sp.sortField
+    ? {
+        field: (sp.sortField as ViewSort["field"]) ?? "lastSeen",
+        direction: sp.sortDir === "asc" ? "asc" : "desc",
+      }
+    : sp.sort
+      ? { field: sp.sort as ViewSort["field"], direction: "desc" }
+      : activeView?.sort ?? null
+
+  const { rows, totalBeforeFilter, isMock } = await listDevices({
+    q: effectiveFilters.q,
+    client: effectiveFilters.client,
+    os: effectiveFilters.os as DeviceListFilterOs,
+    online: effectiveFilters.online,
+    role: effectiveFilters.role,
+    hasAlerts: effectiveFilters.hasAlerts,
+    maintenance: effectiveFilters.maintenance,
+    enrolled: effectiveFilters.enrolled,
+    sortField: effectiveSort?.field,
+    sortDir: effectiveSort?.direction,
+  })
+
+  // Overlay = URL-provided params that diverge from the view's saved filter+sort
+  const hasOverlay =
+    !!sp.q || !!sp.client || !!sp.os || !!sp.online || !!sp.role ||
+    !!sp.hasAlerts || !!sp.maintenance || !!sp.enrolled ||
+    !!sp.sort || !!sp.sortField
 
   return (
     <AppShell>
@@ -44,170 +96,52 @@ export default async function DevicesPage({
               Devices
             </h1>
             <p style={{ color: "var(--color-text-secondary)", fontSize: "13px", margin: 0 }}>
-              Flat fleet-wide list. Filters and sort persist in the URL —
-              copy the link to share a saved view.
+              Pick a saved view or filter live. Star a personal view to make
+              it your default.
             </p>
           </div>
-          <div style={{ fontSize: "11px", color: "var(--color-text-muted)", textAlign: "right" }}>
-            {filtersActive ? (
-              <>
-                Showing <strong style={{ color: "var(--color-text-primary)", fontWeight: 600 }}>{rows.length}</strong> of {totalBeforeFilter}
-              </>
-            ) : (
-              <>
-                <strong style={{ color: "var(--color-text-primary)", fontWeight: 600 }}>{totalBeforeFilter}</strong> total
-              </>
-            )}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: "11px", color: "var(--color-text-muted)" }}>
+              {hasOverlay ? (
+                <>Showing <strong style={{ color: "var(--color-text-primary)", fontWeight: 600 }}>{rows.length}</strong> of {totalBeforeFilter}</>
+              ) : (
+                <><strong style={{ color: "var(--color-text-primary)", fontWeight: 600 }}>{totalBeforeFilter}</strong> total</>
+              )}
+            </span>
+            <ColumnsMenu hiddenColumns={hiddenColumns} />
           </div>
         </header>
 
         {isMock && <SeedBanner kind="fleet" />}
 
-        <FilterStrip filters={filters} facets={facets} />
+        <ViewSelector
+          views={views}
+          defaultViewId={defaultViewId}
+          activeViewId={activeView?.id ?? null}
+          currentFilters={effectiveFilters}
+          currentSort={effectiveSort}
+          isAdmin={ctx?.role === "ADMIN"}
+        />
 
-        <DeviceTable rows={rows} />
+        <DeviceTable rows={rows} hiddenColumns={hiddenColumns} />
       </div>
     </AppShell>
   )
 }
 
-function FilterStrip({
-  filters,
-  facets,
-}: {
-  filters: {
-    q?: string
-    client?: string
-    os?: "windows" | "linux" | "darwin"
-    online?: "online" | "offline"
-    role?: string
-    sort?: "lastSeen" | "hostname" | "alerts"
-  }
-  facets: {
-    clients: Array<{ name: string; count: number }>
-    osCounts: { windows: number; linux: number; darwin: number }
-    onlineCounts: { online: number; offline: number }
-    roles: Array<{ name: string; count: number }>
-  }
-}) {
-  const baseParams = new URLSearchParams()
-  if (filters.q) baseParams.set("q", filters.q)
-  if (filters.sort) baseParams.set("sort", filters.sort)
+type DeviceListFilterOs = ("windows" | "linux" | "darwin")[] | undefined
 
-  function withParam(key: string, value: string | undefined): string {
-    const next = new URLSearchParams(baseParams.toString())
-    if (filters.client && key !== "client") next.set("client", filters.client)
-    if (filters.os && key !== "os") next.set("os", filters.os)
-    if (filters.online && key !== "online") next.set("online", filters.online)
-    if (filters.role && key !== "role") next.set("role", filters.role)
-    if (value === undefined) next.delete(key)
-    else next.set(key, value)
-    const s = next.toString()
-    return `/devices${s ? `?${s}` : ""}`
-  }
-
-  const anyFilter = filters.client || filters.os || filters.online || filters.role
-  return (
-    <Card padding="12px 14px" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-      <FacetRow label="OS">
-        <FilterChip label="Any" href={withParam("os", undefined)} active={!filters.os} />
-        <FilterChip label={`Windows · ${facets.osCounts.windows}`} href={withParam("os", "windows")} active={filters.os === "windows"} />
-        <FilterChip label={`Linux · ${facets.osCounts.linux}`} href={withParam("os", "linux")} active={filters.os === "linux"} />
-        <FilterChip label={`macOS · ${facets.osCounts.darwin}`} href={withParam("os", "darwin")} active={filters.os === "darwin"} />
-      </FacetRow>
-      <FacetRow label="Online">
-        <FilterChip label="Any" href={withParam("online", undefined)} active={!filters.online} />
-        <FilterChip
-          label={`Online · ${facets.onlineCounts.online}`}
-          href={withParam("online", "online")}
-          active={filters.online === "online"}
-        />
-        <FilterChip
-          label={`Offline · ${facets.onlineCounts.offline}`}
-          href={withParam("online", "offline")}
-          active={filters.online === "offline"}
-        />
-      </FacetRow>
-      {facets.clients.length > 1 && (
-        <FacetRow label="Client">
-          <FilterChip label="Any" href={withParam("client", undefined)} active={!filters.client} />
-          {facets.clients.map((c) => (
-            <FilterChip
-              key={c.name}
-              label={`${c.name} · ${c.count}`}
-              href={withParam("client", c.name)}
-              active={filters.client === c.name}
-            />
-          ))}
-        </FacetRow>
-      )}
-      {facets.roles.length > 0 && (
-        <FacetRow label="Role">
-          <FilterChip label="Any" href={withParam("role", undefined)} active={!filters.role} />
-          {facets.roles.map((r) => (
-            <FilterChip
-              key={r.name}
-              label={`${r.name} · ${r.count}`}
-              href={withParam("role", r.name)}
-              active={filters.role === r.name}
-            />
-          ))}
-        </FacetRow>
-      )}
-      {anyFilter && (
-        <div>
-          <Link
-            href={`/devices${filters.q ? `?q=${encodeURIComponent(filters.q)}` : ""}`}
-            style={{
-              fontSize: "11px",
-              color: "var(--color-text-secondary)",
-              textDecoration: "underline",
-            }}
-          >
-            Reset filters
-          </Link>
-        </div>
-      )}
-    </Card>
+function parseList(s?: string): string[] | undefined {
+  if (!s) return undefined
+  const xs = s.split(",").map((x) => x.trim()).filter(Boolean)
+  return xs.length > 0 ? xs : undefined
+}
+function parseOsList(s?: string): ("windows" | "linux" | "darwin")[] | undefined {
+  const xs = parseList(s)
+  if (!xs) return undefined
+  const ok = xs.filter((x): x is "windows" | "linux" | "darwin" =>
+    x === "windows" || x === "linux" || x === "darwin",
   )
+  return ok.length > 0 ? ok : undefined
 }
 
-function FacetRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-      <span
-        style={{
-          fontSize: "10px",
-          fontWeight: 600,
-          color: "var(--color-text-muted)",
-          textTransform: "uppercase",
-          letterSpacing: "0.07em",
-          width: "52px",
-        }}
-      >
-        {label}
-      </span>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>{children}</div>
-    </div>
-  )
-}
-
-function FilterChip({ label, href, active }: { label: string; href: string; active: boolean }) {
-  return (
-    <Link
-      href={href}
-      style={{
-        padding: "3px 9px",
-        fontSize: "11px",
-        borderRadius: "999px",
-        textDecoration: "none",
-        background: active ? "var(--color-accent)" : "var(--color-background-tertiary)",
-        color: active ? "white" : "var(--color-text-secondary)",
-        border: active ? "0.5px solid var(--color-accent)" : "0.5px solid var(--color-border-tertiary)",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {label}
-    </Link>
-  )
-}

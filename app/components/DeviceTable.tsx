@@ -18,7 +18,23 @@ import { StatusDot } from "@/components/ui/StatusDot"
  * URL params); search narrows further. Sort uses URL too — clicking a
  * column header rewrites `?sort=`.
  */
-export default function DeviceTable({ rows }: { rows: DeviceRow[] }) {
+export default function DeviceTable({
+  rows,
+  hiddenColumns = [],
+}: {
+  rows: DeviceRow[]
+  /** Hideable column ids the operator has hidden via ColumnsMenu. */
+  hiddenColumns?: string[]
+}) {
+  const hidden = new Set(hiddenColumns)
+  const show = {
+    client: !hidden.has("client"),
+    os: !hidden.has("os"),
+    role: !hidden.has("role"),
+    ip: !hidden.has("ip"),
+    lastSeen: !hidden.has("lastSeen"),
+    alerts: !hidden.has("alerts"),
+  }
   const router = useRouter()
   const params = useSearchParams()
   const initialQ = params.get("q") ?? ""
@@ -157,16 +173,20 @@ export default function DeviceTable({ rows }: { rows: DeviceRow[] }) {
                 <th style={thStyle}>
                   <SortHead label="Host" target="hostname" current={sortValue} href={sortHref("hostname")} />
                 </th>
-                <th style={thStyle}>Client</th>
-                <th style={thStyle}>OS</th>
-                <th style={thStyle}>Role</th>
-                <th style={thStyle}>IP</th>
-                <th style={thStyle}>
-                  <SortHead label="Last seen" target="lastSeen" current={sortValue} href={sortHref("lastSeen")} />
-                </th>
-                <th style={thStyle}>
-                  <SortHead label="Alerts" target="alerts" current={sortValue} href={sortHref("alerts")} />
-                </th>
+                {show.client && <th style={thStyle}>Client</th>}
+                {show.os && <th style={thStyle}>OS</th>}
+                {show.role && <th style={thStyle}>Role</th>}
+                {show.ip && <th style={thStyle}>IP</th>}
+                {show.lastSeen && (
+                  <th style={thStyle}>
+                    <SortHead label="Last seen" target="lastSeen" current={sortValue} href={sortHref("lastSeen")} />
+                  </th>
+                )}
+                {show.alerts && (
+                  <th style={thStyle}>
+                    <SortHead label="Alerts" target="alerts" current={sortValue} href={sortHref("alerts")} />
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -230,43 +250,55 @@ export default function DeviceTable({ rows }: { rows: DeviceRow[] }) {
                         )}
                       </div>
                     </td>
-                    <td style={tdStyle}>
-                      <Link
-                        href={`/devices?client=${encodeURIComponent(r.clientName)}`}
-                        onClick={(e) => e.stopPropagation()}
-                        style={{ color: "var(--color-text-secondary)", textDecoration: "none" }}
-                      >
-                        {r.clientName}
-                      </Link>
-                    </td>
-                    <td style={tdStyle}>
-                      <code style={codeStyle}>{r.os ?? "—"}</code>
-                      {r.osVersion && (
-                        <div style={{ fontSize: "10.5px", color: "var(--color-text-muted)", marginTop: "2px" }}>
-                          {shortenOsVersion(r.osVersion)}
-                        </div>
-                      )}
-                    </td>
-                    <td style={tdStyle}>{r.role ?? <span style={{ color: "var(--color-text-muted)" }}>—</span>}</td>
-                    <td style={{ ...tdStyle, fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "11.5px" }}>
-                      {r.ipAddress ?? <span style={{ color: "var(--color-text-muted)" }}>—</span>}
-                    </td>
-                    <td style={tdStyle}>
-                      {relativeLastSeen(r.lastSeenAt)}
-                    </td>
-                    <td style={tdStyle}>
-                      {r.alertCount > 0 ? (
+                    {show.client && (
+                      <td style={tdStyle}>
                         <Link
-                          href={`/alerts?deviceId=${r.id}&state=open`}
+                          href={`/devices?client=${encodeURIComponent(r.clientName)}`}
                           onClick={(e) => e.stopPropagation()}
-                          style={alertPillStyle}
+                          style={{ color: "var(--color-text-secondary)", textDecoration: "none" }}
                         >
-                          {r.alertCount}
+                          {r.clientName}
                         </Link>
-                      ) : (
-                        <span style={{ color: "var(--color-text-muted)" }}>0</span>
-                      )}
-                    </td>
+                      </td>
+                    )}
+                    {show.os && (
+                      <td style={tdStyle}>
+                        <code style={codeStyle}>{r.os ?? "—"}</code>
+                        {r.osVersion && (
+                          <div style={{ fontSize: "10.5px", color: "var(--color-text-muted)", marginTop: "2px" }}>
+                            {shortenOsVersion(r.osVersion)}
+                          </div>
+                        )}
+                      </td>
+                    )}
+                    {show.role && (
+                      <td style={tdStyle}>{r.role ?? <span style={{ color: "var(--color-text-muted)" }}>—</span>}</td>
+                    )}
+                    {show.ip && (
+                      <td style={{ ...tdStyle, fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "11.5px" }}>
+                        {r.ipAddress ?? <span style={{ color: "var(--color-text-muted)" }}>—</span>}
+                      </td>
+                    )}
+                    {show.lastSeen && (
+                      <td style={tdStyle}>
+                        {relativeLastSeen(r.lastSeenAt)}
+                      </td>
+                    )}
+                    {show.alerts && (
+                      <td style={tdStyle}>
+                        {r.alertCount > 0 ? (
+                          <Link
+                            href={`/alerts?deviceId=${r.id}&state=open`}
+                            onClick={(e) => e.stopPropagation()}
+                            style={alertPillStyle}
+                          >
+                            {r.alertCount}
+                          </Link>
+                        ) : (
+                          <span style={{ color: "var(--color-text-muted)" }}>0</span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 )
               })}

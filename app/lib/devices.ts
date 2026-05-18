@@ -116,13 +116,25 @@ export interface DeviceRow {
   isMock: boolean
 }
 
+/** Legacy filter shape kept for back-compat with callers that still
+ *  pass single-value filters via URL params. New code should use the
+ *  ViewFilters / ViewSort types from lib/device-views.ts. */
 export interface DeviceFilters {
   q?: string
   client?: string
-  os?: "windows" | "linux" | "darwin"
+  /** Single value (legacy) OR array (view-based). Both accepted. */
+  os?: "windows" | "linux" | "darwin" | ("windows" | "linux" | "darwin")[]
   online?: "online" | "offline"
-  role?: string
+  /** Single value (legacy) OR array (view-based). */
+  role?: string | string[]
+  hasAlerts?: boolean
+  maintenance?: "on" | "off"
+  enrolled?: "yes" | "no"
+  /** Legacy sort selector (string). New code passes ViewSort
+   *  through { sortField, sortDir }. */
   sort?: "lastSeen" | "hostname" | "alerts"
+  sortField?: "lastSeen" | "hostname" | "friendlyName" | "alerts" | "client" | "os" | "role"
+  sortDir?: "asc" | "desc"
 }
 
 export interface DeviceListResult {
@@ -192,12 +204,24 @@ export async function listDevices(filters: DeviceFilters = {}): Promise<DeviceLi
     )
   }
   if (filters.client) rows = rows.filter((r) => r.clientName === filters.client)
-  if (filters.os) rows = rows.filter((r) => r.os === filters.os)
+  if (filters.os) {
+    const osSet = Array.isArray(filters.os) ? new Set(filters.os) : new Set([filters.os])
+    rows = rows.filter((r) => r.os !== null && osSet.has(r.os))
+  }
   if (filters.online === "online") rows = rows.filter((r) => r.isOnline)
   if (filters.online === "offline") rows = rows.filter((r) => !r.isOnline)
-  if (filters.role) rows = rows.filter((r) => r.role === filters.role)
+  if (filters.role) {
+    const roleSet = Array.isArray(filters.role) ? new Set(filters.role) : new Set([filters.role])
+    rows = rows.filter((r) => r.role !== null && roleSet.has(r.role))
+  }
+  if (filters.hasAlerts === true) rows = rows.filter((r) => r.alertCount > 0)
+  if (filters.hasAlerts === false) rows = rows.filter((r) => r.alertCount === 0)
+  // maintenance + enrolled need data not on DeviceRow today. Approximate
+  // from the underlying row by fetching extras in a later iteration — for
+  // now these filter clauses are pass-through.
 
-  rows.sort(sortComparator(filters.sort ?? "lastSeen"))
+  // Sort precedence: explicit sortField+sortDir > legacy sort > default
+  rows.sort(sortComparatorV2(filters))
 
   return { rows, totalBeforeFilter, isMock, facets }
 }
@@ -280,6 +304,45 @@ function sortComparator(sort: NonNullable<DeviceFilters["sort"]>) {
     const bSeen = b.lastSeenAt?.getTime() ?? 0
     if (bSeen !== aSeen) return bSeen - aSeen
     return a.hostname.localeCompare(b.hostname)
+  }
+}
+
+/** ViewSort-aware comparator. Falls back to the legacy lastSeen ordering
+ *  if no explicit field is provided. Direction respected for each field. */
+function sortComparatorV2(filters: DeviceFilters) {
+  const field = filters.sortField ?? filters.sort ?? "lastSeen"
+  const dir = filters.sortDir ?? (field === "hostname" || field === "friendlyName" || field === "client" ? "asc" : "desc")
+  const flip = dir === "asc" ? 1 : -1
+  return (a: DeviceRow, b: DeviceRow): number => {
+    switch (field) {
+      case "hostname":
+        return a.hostname.localeCompare(b.hostname) * flip
+      case "friendlyName": {
+        const an = a.friendlyName ?? a.hostname
+        const bn = b.friendlyName ?? b.hostname
+        return an.localeCompare(bn) * flip
+      }
+      case "client":
+        return a.clientName.localeCompare(b.clientName) * flip
+      case "os":
+        return (a.os ?? "").localeCompare(b.os ?? "") * flip
+      case "role":
+        return (a.role ?? "").localeCompare(b.role ?? "") * flip
+      case "alerts":
+        if (b.alertCount !== a.alertCount) return (b.alertCount - a.alertCount) * (dir === "asc" ? -1 : 1)
+        return a.hostname.localeCompare(b.hostname)
+      case "lastSeen":
+      default: {
+        // online first ALWAYS (regardless of direction) — operator
+        // intent is "show me the live boxes." Only the time-portion
+        // honors direction.
+        if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1
+        const aSeen = a.lastSeenAt?.getTime() ?? 0
+        const bSeen = b.lastSeenAt?.getTime() ?? 0
+        if (bSeen !== aSeen) return (bSeen - aSeen) * (dir === "asc" ? -1 : 1)
+        return a.hostname.localeCompare(b.hostname)
+      }
+    }
   }
 }
 

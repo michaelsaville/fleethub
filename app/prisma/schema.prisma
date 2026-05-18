@@ -1670,3 +1670,52 @@ model Fl_AgentRegistration {
   @@map("fl_agent_registrations")
   @@schema("fleethub")
 }
+
+// ─── Wave B — saved views on /devices ─────────────────────────────────────
+// Mirrors TicketHub TH_TicketView + TH_UserViewPreference 1:1. Filter
+// shape + sort fields are FleetHub-specific (see lib/device-views.ts).
+//
+// Visibility uses the TH convention:
+//   PERSONAL — owner-only; userId required, edit/delete locked to owner.
+//   SHARED   — visible to all techs; only ADMINs can create/edit.
+//   SYSTEM   — seeded on first /devices load; not editable.
+
+model Fl_DeviceView {
+  id            String   @id @default(cuid())
+  name          String
+  /// JSON: { q?, client?, os[]?, online?, role[]?, hasAlerts?,
+  /// maintenance?, enrolled? }. See lib/device-views.ts ViewFilters type.
+  filtersJson   String   @db.Text
+  /// JSON: { field, direction } | null = default sort.
+  sortJson      String?  @db.Text
+  visibility    String   @default("PERSONAL") // PERSONAL | SHARED | SYSTEM
+  /// Optional icon slug (lucide-name or emoji).
+  icon          String?
+  displayOrder  Int      @default(0)
+  /// Owner. NULL for SYSTEM + SHARED. Enforces edit authz on PERSONAL.
+  userId        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([visibility, displayOrder])
+  @@index([userId])
+  @@map("fl_device_views")
+  @@schema("fleethub")
+}
+
+model Fl_UserDevicePreference {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  defaultViewId String
+  /// Hideable column ids the user has hidden. Always-visible columns
+  /// (checkbox, name) aren't tracked. Validated against allow-list
+  /// server-side; unknowns dropped silently.
+  hiddenColumns String[] @default([])
+  /// Preferred order of hideable columns. Empty = canonical order.
+  columnOrder   String[] @default([])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("fl_user_device_preferences")
+  @@schema("fleethub")
+}
