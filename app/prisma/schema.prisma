@@ -290,6 +290,10 @@ model Fl_Tenant {
   /// Phase 11 WS-D — informational only in v1 (no enforcement);
   /// surfaces in Policies subtab for operator awareness.
   passwordExpiryDays                   Int     @default(0)
+  /// Phase 12 WS-A — when true, the tenant has Fl_NetworkDevice rows
+  /// being polled by the network-probe cron. Off-by-default so a new
+  /// tenant doesn't enable polling without explicit opt-in.
+  netmonEnabled                        Boolean @default(false)
 
   createdAt                   DateTime @default(now())
   updatedAt                   DateTime @updatedAt
@@ -636,11 +640,16 @@ model Fl_OncallSchedule {
   name            String   // "Ops primary", "Healthcare on-call"
   /// JSON: array of { userId, dayOfWeek: 0-6 (Sunday=0), start: "HH:MM",
   /// end: "HH:MM" } slots. Multiple slots may cover the same moment —
-  /// first match wins. UTC time-of-day.
+  /// first match wins. Time-of-day is interpreted in `timezone` (Phase
+  /// 12 WS-E.4) — falls back to UTC when null.
   rotationJson    String
   /// JSON: array of { userId, start: ISO8601, end: ISO8601, reason }
   /// override windows. Overrides take precedence over the rotation.
   overridesJson   String?
+  /// Phase 12 WS-E.4 — IANA tz name (e.g. "America/New_York"). When
+  /// set, rotationJson slot start/end times are interpreted in this
+  /// tz with DST applied correctly. Null = legacy UTC behavior.
+  timezone        String?
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -1462,5 +1471,150 @@ model Fl_StepUpConsumed {
 
   @@index([expMs])
   @@map("fl_step_up_consumed")
+  @@schema("fleethub")
+}
+
+// ─── PHASE 12 — EVALUATOR LEASE (WS-E.1) ────────────────────────────────────
+
+/// Phase 12 WS-E.1. Atomic cron-throttling primitive. Each cron route
+/// claims its name via INSERT...ON CONFLICT DO UPDATE WHERE
+/// leasedUntil < now() RETURNING name. 0 rows = lease held by another
+/// runner → 409 skip. Heartbeat extends leasedUntil mid-run. Survives
+/// app restart (lease entries are rows, not in-process state). Also
+/// powers the /api/health cron-stale detector (WS-E.6).
+model Fl_EvaluatorLease {
+  name          String   @id
+  leasedAt      DateTime @default(now())
+  leasedUntil   DateTime
+  leasedBy      String
+  heartbeatAt   DateTime @default(now())
+
+  @@index([leasedUntil])
+  @@map("fl_evaluator_leases")
+  @@schema("fleethub")
+}
+
+// ─── PHASE 12 — NETWORK DEVICE MONITORING (WS-A) ────────────────────────────
+
+/// Phase 12 WS-A. Switches / routers / APs / printers / UPS / etc.
+/// monitored via ICMP and/or SNMP. SNMP creds resolved via Phase 11
+/// vault (snmpCredentialId → Fl_Credential where kind='snmp-v3').
+model Fl_NetworkDevice {
+  id                String    @id @default(cuid())
+  clientName        String
+  displayName       String
+  ipAddress         String
+  kind              String    // switch | router | firewall | ap | printer | ups | other
+  snmpVersion       String    @default("none") // none | v2c | v3
+  snmpCredentialId  String?
+  icmpEnabled       Boolean   @default(true)
+  pollIntervalSec   Int       @default(60)
+  tagsJson          String?
+  isActive          Boolean   @default(true)
+  lastProbedAt      DateTime?
+  createdBy         String
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  probes            Fl_NetworkProbe[]
+
+  @@index([clientName, isActive])
+  @@map("fl_network_devices")
+  @@schema("fleethub")
+}
+
+/// Phase 12 WS-A fact-table. One row per probe attempt. Append-only.
+/// Retention 90d (cron sweep ships BEFORE this table is populated per
+/// PHASE-12-DESIGN.md §3 footgun 2). For >7d queries the rollup
+/// table Fl_NetworkProbeHour is faster.
+model Fl_NetworkProbe {
+  id                String          @id @default(cuid())
+  networkDeviceId   String
+  device            Fl_NetworkDevice @relation(fields: [networkDeviceId], references: [id], onDelete: Cascade)
+  ts                DateTime        @default(now())
+  kind              String          // icmp | snmp-get | snmp-walk
+  rttMs             Float?
+  ok                Boolean
+  errorMsg          String?
+  payloadJson       String?
+
+  @@index([networkDeviceId, ts(sort: Desc)])
+  @@map("fl_network_probes")
+  @@schema("fleethub")
+}
+
+/// Phase 12 WS-A materialized hourly rollup. Populated by
+/// /api/cron/network-probe-rollup; NOT a view (architect gut-check
+/// §5 — view re-scans on every chart render).
+model Fl_NetworkProbeHour {
+  networkDeviceId   String
+  hour              DateTime
+  p50Ms             Float?
+  p95Ms             Float?
+  p99Ms             Float?
+  lossPct           Float
+  sampleCount       Int
+
+  @@id([networkDeviceId, hour])
+  @@index([hour])
+  @@map("fl_network_probe_hours")
+  @@schema("fleethub")
+}
+
+// ─── PHASE 12 — MAINTENANCE WINDOWS (WS-B) ──────────────────────────────────
+
+/// Phase 12 WS-B. Recurring or one-off windows during which the
+/// /api/cron/maintenance-window-eval cron flips Fl_Device.maintenanceMode
+/// (reuses Phase 3 plumbing — no new suppression code path) and
+/// optionally marks active alerts state='suppressed' for matching kinds.
+model Fl_MaintenanceWindow {
+  id                       String    @id @default(cuid())
+  tenantName               String
+  name                     String
+  /// RRULE-style cron ("every Sunday 02:00") — operators want recurring,
+  /// not 52 rows.
+  cron                     String
+  durationMin              Int
+  suppressAlertKindsJson   String?
+  /// JSON: { deviceTags?: string[], deviceGroupId?: string }. Null = all
+  /// devices in tenant.
+  scopeJson                String?
+  nextStart                DateTime?
+  nextEnd                  DateTime?
+  lastFiredAt              DateTime?
+  isActive                 Boolean   @default(true)
+  createdBy                String
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@index([tenantName, isActive])
+  @@index([nextStart])
+  @@map("fl_maintenance_windows")
+  @@schema("fleethub")
+}
+
+// ─── PHASE 12 — CRYPTO ROTATION (WS-C) ──────────────────────────────────────
+
+/// Phase 12 WS-C. State of an in-flight or completed vault-KEK
+/// rotation. Wraps the rewrapTenantCredentials background job so the
+/// /admin/crypto/rotate wizard can poll progress and so concurrent
+/// rotation attempts are blocked (state='in-progress' present → second
+/// click refused).
+model Fl_CryptoRotation {
+  id            String    @id @default(cuid())
+  purpose       String    // vault-kek | (future)
+  fromVersion   Int
+  toVersion     Int
+  state         String    @default("in-progress") // in-progress | done | failed
+  processed     Int       @default(0)
+  total         Int       @default(0)
+  currentTenant String?
+  errorMsg      String?
+  initiatedBy   String
+  startedAt     DateTime  @default(now())
+  completedAt   DateTime?
+
+  @@index([state, startedAt])
+  @@map("fl_crypto_rotations")
   @@schema("fleethub")
 }
