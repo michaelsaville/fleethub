@@ -40,6 +40,12 @@ model Fl_StaffUser {
   /// login. Per-tenant Fl_Tenant.mfaRequired forces this for all
   /// users on the tenant.
   mfaEnforcedAt      DateTime?
+  /// Phase 11 WS-C §1 — failed mfa-verify counter. Reset on success.
+  /// 5 failures within the lockout window triggers mfaLockedUntil.
+  mfaFailCount       Int       @default(0)
+  /// Phase 11 WS-C §1 — when set + future, every mfa-verify is rejected
+  /// without checking the code. Cleared on lockout-window expiry.
+  mfaLockedUntil     DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -80,11 +86,18 @@ model Fl_AuditLog {
   detailJson    String?
   prevHash      String?
   rowHash       String?
+  /// Phase 11 WS-E — review-queue state. "unreviewed" by default; admin
+  /// can flip to "reviewed" or "flagged" per row. Powers the
+  /// "High-risk unreviewed" quick-range pill on /audit.
+  reviewStatus  String   @default("unreviewed")
+  reviewedBy    String?
+  reviewedAt    DateTime?
   createdAt     DateTime @default(now())
 
   @@index([clientName, createdAt])
   @@index([deviceId, createdAt])
   @@index([action, createdAt])
+  @@index([reviewStatus, createdAt])
   @@map("fl_audit_log")
   @@schema("fleethub")
 }
@@ -258,6 +271,25 @@ model Fl_Tenant {
   /// + future scheduling features. App-level default America/New_York
   /// when null.
   timezone                             String?
+
+  /// Phase 11 WS-B — 4-eyes approval threshold for bulk dispatch.
+  /// Bulk verbs touching > N devices route through Fl_ActionApproval.
+  bulkApprovalThreshold                Int     @default(50)
+  /// Phase 11 WS-A/B — when true, credential.disclose + credential.update
+  /// route through 4-eyes approval (in addition to step-up auth).
+  /// Default-on recommended for HIPAA tenants (Phase 11 §6 activation
+  /// flips this for hipaaMode tenants).
+  disclosureRequiresApproval           Boolean @default(false)
+  /// Phase 11 WS-B — JSON array of device tag names. shell.open on
+  /// devices carrying any of these tags routes through 4-eyes.
+  /// Empty/null = no shell approval. Examples: ["prod","finance"].
+  shellApprovalTagsJson                String?
+  /// Phase 11 WS-D — max NextAuth session duration (hours). Defaults
+  /// to 12 (matches mfa-cookie TTL); operator may shorten for HIPAA.
+  sessionMaxHours                      Int     @default(12)
+  /// Phase 11 WS-D — informational only in v1 (no enforcement);
+  /// surfaces in Policies subtab for operator awareness.
+  passwordExpiryDays                   Int     @default(0)
 
   createdAt                   DateTime @default(now())
   updatedAt                   DateTime @updatedAt
@@ -1253,5 +1285,182 @@ model Fl_TenantNote {
 
   @@index([tenantName, deletedAt, isPinned])
   @@map("fl_tenant_notes")
+  @@schema("fleethub")
+}
+
+// ─── PHASE 11 — CRYPTO + VAULT ──────────────────────────────────────────────
+
+/// Phase 11 WS-A. Single source of truth for every server-side secret.
+/// Purposes: vault-kek (symmetric; wraps per-tenant DEKs),
+/// approval-signing (HMAC; signs 4-eyes approval tokens),
+/// ack-signing (HMAC; signs Phase 7 alert-ack URLs — migrated),
+/// step-up-signing (HMAC; signs WS-C step-up tokens),
+/// webauthn-rp (asymmetric; the RP keypair for WebAuthn).
+///
+/// Symmetric/HMAC keys: keyMaterial is the key bytes wrapped by
+/// FLEETHUB_CRYPTO_ROOT_KEY using AES-256-GCM. Asymmetric keys:
+/// publicKey holds the raw public bytes; keyMaterial holds the
+/// private key wrapped by the root.
+///
+/// Rotation: insert a new row with version+1, retire the old by
+/// setting retiredAt. Both rows are kept; the active reader uses
+/// max(version) where retiredAt is null.
+model Fl_CryptoKey {
+  id            String    @id @default(cuid())
+  purpose       String    // vault-kek | approval-signing | ack-signing | step-up-signing | webauthn-rp
+  algorithm     String    // aes-256-gcm | hmac-sha256 | ed25519
+  /// Wrapped private/symmetric key bytes (wrap = AES-256-GCM under root key).
+  keyMaterial   Bytes
+  /// Raw public key bytes. Null for symmetric/HMAC keys.
+  publicKey     Bytes?
+  version       Int
+  createdAt     DateTime  @default(now())
+  createdBy     String
+  retiredAt     DateTime?
+  notes         String?
+
+  @@unique([purpose, version])
+  @@index([purpose, retiredAt])
+  @@map("fl_crypto_keys")
+  @@schema("fleethub")
+}
+
+/// Phase 11 WS-A. Encrypted credential entry per tenant. Read-side
+/// requires step-up token + (if disclosureRequiresApproval) 4-eyes.
+/// Server-internal callers (alert-channels, future SNMP) use
+/// unsealForSystemUse which writes the disclosure log without
+/// requiring step-up.
+model Fl_Credential {
+  id              String    @id @default(cuid())
+  tenantName      String
+  /// Kind enum: admin-pw | api-key | wifi-psk | snmp-v3 | smtp-password | webhook-secret | other
+  kind            String
+  label           String
+  /// AES-256-GCM ciphertext of the plaintext secret.
+  ciphertext      Bytes
+  /// 12-byte GCM nonce.
+  nonce           Bytes
+  /// Fl_CryptoKey.version for purpose='vault-kek' used to derive the DEK.
+  keyVersion      Int
+  /// Optional rotation reminder.
+  rotateBy        DateTime?
+  lastAccessedAt  DateTime?
+  /// When this credential was replaced by a newer version (rotation).
+  /// Replaced rows are kept for forensics; reads filter replacedAt = null.
+  replacedAt      DateTime?
+  createdBy       String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  disclosures     Fl_CredentialDisclosureLog[]
+
+  @@index([tenantName, kind, replacedAt])
+  @@index([tenantName, replacedAt])
+  @@map("fl_credentials")
+  @@schema("fleethub")
+}
+
+/// Phase 11 WS-A. Every time a credential is disclosed (UI or system),
+/// a row lands here. This is the ONLY surface where disclosure history
+/// can be queried — the main Fl_AuditLog disclose row never carries
+/// plaintext (redacted by withAudit allowlist).
+model Fl_CredentialDisclosureLog {
+  id             String         @id @default(cuid())
+  credentialId   String
+  credential     Fl_Credential  @relation(fields: [credentialId], references: [id], onDelete: Cascade)
+  viewedBy       String
+  viewedAt       DateTime       @default(now())
+  /// Free-text justification from the operator (UI disclose) or a tag
+  /// like "system:alert-channels" for server-internal use.
+  justification  String
+  ip             String?
+  userAgent      String?
+  /// "ui-disclose" | "ui-copy-to-clipboard" | "system:alert-channels" | etc.
+  context        String
+
+  @@index([credentialId, viewedAt])
+  @@index([viewedBy, viewedAt])
+  @@map("fl_credential_disclosure_log")
+  @@schema("fleethub")
+}
+
+// ─── PHASE 11 — APPROVAL WORKFLOW ───────────────────────────────────────────
+
+/// Phase 11 WS-B. 4-eyes approval state machine. Created by
+/// lib/approval-gate.ts:requireApproval(); consumed by consumeApproval()
+/// after approver clicks Approve in /approvals inbox.
+///
+/// payloadHash is captured at request time and verified at consume
+/// time — protects against payload swap-after-approval.
+///
+/// Transitions: pending → approved | denied | expired
+///              approved → consumed (one-way, race-safe)
+model Fl_ActionApproval {
+  id            String    @id @default(cuid())
+  /// Verb: bulk.dispatch | shell.open | credential.disclose | credential.update
+  ///       | alert-route.delete | oncall-schedule.delete
+  action        String
+  tenantName    String
+  /// Canonical JSON of the action's input payload.
+  payloadJson   String
+  /// SHA-256 hex of payloadJson — anti-swap guard.
+  payloadHash   String
+  requestedBy   String
+  requestedAt   DateTime  @default(now())
+  /// Optional UI scope label (tag name, group id, route id).
+  scope         String?
+  requiredRole  String    @default("ADMIN")
+  state         String    @default("pending") // pending | approved | denied | expired | consumed
+  approverEmail String?
+  approvedAt    DateTime?
+  denyReason    String?
+  consumedAt    DateTime?
+  expiresAt     DateTime
+
+  @@index([state, expiresAt])
+  @@index([tenantName, state, requestedAt])
+  @@index([requestedBy, requestedAt])
+  @@map("fl_action_approvals")
+  @@schema("fleethub")
+}
+
+// ─── PHASE 11 — WEBAUTHN + STEP-UP ──────────────────────────────────────────
+
+/// Phase 11 WS-C. WebAuthn credentials per staff user. Multiple
+/// allowed (one platform authenticator + one security key is the
+/// typical pattern).
+model Fl_WebAuthnCred {
+  id             String    @id @default(cuid())
+  userId         String
+  /// Raw credentialId from the authenticator. Indexed for lookup.
+  credentialId   Bytes     @unique
+  publicKey      Bytes
+  signCount      BigInt    @default(0)
+  /// JSON array: usb | nfc | ble | internal
+  transportsJson String?
+  /// Operator-chosen label, e.g. "MacBook TouchID".
+  name           String
+  aaguid         Bytes?
+  createdAt      DateTime  @default(now())
+  lastUsedAt     DateTime?
+
+  @@index([userId])
+  @@map("fl_webauthn_creds")
+  @@schema("fleethub")
+}
+
+/// Phase 11 WS-C. One-time replay-guard set for step-up tokens.
+/// Token is HMAC-signed by Fl_CryptoKey purpose='step-up-signing'
+/// with a unique jti; consumption writes the jti here. A new cron
+/// purges rows past expMs.
+model Fl_StepUpConsumed {
+  jti          String    @id
+  userId       String
+  consumedAt   DateTime  @default(now())
+  /// Token's own expMs — cron purges after expiry.
+  expMs        BigInt
+
+  @@index([expMs])
+  @@map("fl_step_up_consumed")
   @@schema("fleethub")
 }
