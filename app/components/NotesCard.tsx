@@ -201,22 +201,18 @@ export default function NotesCard({ scope, scopeKey, notes, canEdit }: Props) {
 }
 
 function NoteBody({ body }: { body: string }) {
-  // Server renders the raw markdown text; client hydrates with
-  // sanitized HTML. Prevents an XSS surface if SSR ever bypassed
-  // the sanitize pass.
-  const html = typeof window !== "undefined" ? renderMarkdownSafe(body) : null
-  if (html) {
-    return (
-      <div
-        style={{ fontSize: 13, lineHeight: 1.55, color: "var(--color-text-primary)" }}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-    )
-  }
+  // Phase 11 WS-E.3 fix — render the SAME sanitized HTML on both
+  // server AND client. renderMarkdownSafe runs DOMPurify under
+  // isomorphic-dompurify which works on the server. The Phase-10
+  // SSR/CSR split caused a font-family/font-size FOUC on every
+  // page load (mono-pre-wrap → proportional HTML). Single render
+  // path = no flicker.
+  const html = renderMarkdownSafe(body)
   return (
-    <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--color-text-primary)", whiteSpace: "pre-wrap", fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>
-      {body}
-    </div>
+    <div
+      style={{ fontSize: 13, lineHeight: 1.55, color: "var(--color-text-primary)" }}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
   )
 }
 

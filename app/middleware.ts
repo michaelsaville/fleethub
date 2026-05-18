@@ -42,7 +42,7 @@ export const config = {
      *   must be reachable without an MFA cookie so users CAN enroll)
      * Apply to everything else.
      */
-    "/((?!_next/|api/auth|api/health|api/inbound|api/agent-ingest|api/cron|api/bff|mfa-challenge|login|account/security|favicon\\.ico).*)",
+    "/((?!_next/|api/auth|api/health|api/inbound|api/agent-ingest|api/cron|api/bff|api/well-known|mfa-challenge|login|account/security|favicon\\.ico).*)",
   ],
 }
 

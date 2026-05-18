@@ -1,26 +1,46 @@
 // Phase 10 WS-C §5.6 — markdown rendering for Fl_DeviceNote /
 // Fl_TenantNote.
 //
-// Pipeline: marked → DOMPurify. Both run in the browser only —
-// keeping the parse + sanitize on the client lets server pages
-// stream the raw markdown without paying for the dep on every
-// render. Server-side: we just escape + show plain text on
-// JS-disabled clients.
+// Pipeline: marked → DOMPurify (isomorphic). Same render path
+// server + client (Phase 11 WS-E.3 — closes the SSR/CSR FOUC).
+//
+// Phase 11 WS-E.4 hardening:
+//   - ALLOWED_URI_REGEXP explicit: http/https/mailto/anchor only.
+//     Blocks data:, javascript:, vbscript:, file:, etc.
+//   - afterSanitizeAttributes hook autoinjects rel="noopener
+//     noreferrer" on every <a>. Prevents reverse-tabnabbing.
 
 import { marked } from "marked"
-import DOMPurify from "dompurify"
+import DOMPurify from "isomorphic-dompurify"
 
-// Configure marked once. v1 surface: bold, links, lists, code,
-// inline-code, headings. Tables + task-lists land in v1.5 if
-// asked. mangle/headerIds disabled because we don't need the
-// auto-ID anchors and they make the output noisier.
 marked.use({
   gfm: false,
   breaks: true,
 })
 
+// One-time hook install. isomorphic-dompurify exposes addHook
+// only on the resolved DOMPurify instance. Safe to call multiple
+// times — DOMPurify dedupes hook callbacks by reference.
+let hookInstalled = false
+function ensureHook() {
+  if (hookInstalled) return
+  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+    if (node.tagName === "A") {
+      const el = node as Element
+      el.setAttribute("rel", "noopener noreferrer")
+      // Open external in new tab; in-page anchors keep default.
+      const href = el.getAttribute("href") ?? ""
+      if (href && !href.startsWith("#")) {
+        el.setAttribute("target", "_blank")
+      }
+    }
+  })
+  hookInstalled = true
+}
+
 export function renderMarkdownSafe(body: string): string {
   if (!body) return ""
+  ensureHook()
   const html = marked.parse(body, { async: false }) as string
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: [
@@ -31,13 +51,16 @@ export function renderMarkdownSafe(body: string): string {
     ],
     ALLOWED_ATTR: ["href", "title", "target", "rel"],
     ALLOW_DATA_ATTR: false,
-    ADD_ATTR: ["target"],
+    // Phase 11 WS-E.4 — explicit URI allowlist. Blocks data:,
+    // javascript:, vbscript:, file:, ws:, ftp:, etc. # for
+    // in-page anchor links.
+    ALLOWED_URI_REGEXP: /^(?:https?:|mailto:|#)/i,
   })
 }
 
-/// Server-side plain-text fallback. Used on the FIRST render
-/// before client hydration kicks in. Keeps the layout from
-/// flashing huge then collapsing.
+/// Server-side plain-text fallback. Used by callers that want a
+/// preview line (e.g. /devices table) without the full HTML
+/// rendering surface.
 export function plainTextPreview(body: string, maxChars = 280): string {
   if (!body) return ""
   const stripped = body

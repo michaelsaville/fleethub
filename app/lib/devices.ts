@@ -106,6 +106,10 @@ export interface DeviceRow {
   lastSeenAt: Date | null
   inventory: InventorySnapshot | null
   alertCount: number
+  /// Phase 11 WS-E.3 — count of active (non-deleted) Fl_DeviceNote
+  /// rows for this device. Renders as 📝 chip in /devices table so
+  /// operators see "this host has context notes" before acting.
+  noteCount: number
   isMock: boolean
 }
 
@@ -138,12 +142,21 @@ export async function listDevices(filters: DeviceFilters = {}): Promise<DeviceLi
     rows = getMockDevices()
   } else {
     const live = await prisma.fl_Device.findMany({ where: { isActive: true } })
-    const alertCounts = await prisma.fl_Alert.groupBy({
-      by: ["deviceId"],
-      where: { state: "open", deviceId: { in: live.map((d) => d.id) } },
-      _count: { _all: true },
-    })
+    const ids = live.map((d) => d.id)
+    const [alertCounts, noteCounts] = await Promise.all([
+      prisma.fl_Alert.groupBy({
+        by: ["deviceId"],
+        where: { state: "open", deviceId: { in: ids } },
+        _count: { _all: true },
+      }),
+      prisma.fl_DeviceNote.groupBy({
+        by: ["deviceId"],
+        where: { deletedAt: null, deviceId: { in: ids } },
+        _count: { _all: true },
+      }),
+    ])
     const alertByDevice = new Map(alertCounts.map((a) => [a.deviceId ?? "", a._count._all]))
+    const notesByDevice = new Map(noteCounts.map((n) => [n.deviceId, n._count._all]))
     rows = live.map((d) => ({
       id: d.id,
       clientName: d.clientName,
@@ -156,6 +169,7 @@ export async function listDevices(filters: DeviceFilters = {}): Promise<DeviceLi
       lastSeenAt: d.lastSeenAt,
       inventory: parseInventory(d.inventoryJson),
       alertCount: alertByDevice.get(d.id) ?? 0,
+      noteCount: notesByDevice.get(d.id) ?? 0,
       isMock: false,
     }))
   }
@@ -189,9 +203,10 @@ export async function getDevice(id: string): Promise<DeviceRow | null> {
   }
   const live = await prisma.fl_Device.findUnique({ where: { id } })
   if (!live || !live.isActive) return null
-  const alertCount = await prisma.fl_Alert.count({
-    where: { deviceId: live.id, state: "open" },
-  })
+  const [alertCount, noteCount] = await Promise.all([
+    prisma.fl_Alert.count({ where: { deviceId: live.id, state: "open" } }),
+    prisma.fl_DeviceNote.count({ where: { deviceId: live.id, deletedAt: null } }),
+  ])
   return {
     id: live.id,
     clientName: live.clientName,
@@ -204,6 +219,7 @@ export async function getDevice(id: string): Promise<DeviceRow | null> {
     lastSeenAt: live.lastSeenAt,
     inventory: parseInventory(live.inventoryJson),
     alertCount,
+    noteCount,
     isMock: false,
   }
 }

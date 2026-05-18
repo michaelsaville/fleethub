@@ -584,6 +584,7 @@ export function getMockDevices(): DeviceRow[] {
     lastSeenAt: new Date(now - s.lastSeenMinutesAgo * 60_000),
     inventory: s.inventory,
     alertCount: s.alertCount,
+    noteCount: 0,
     isMock: true,
   }))
 }

@@ -207,6 +207,24 @@ export default function DeviceTable({ rows }: { rows: DeviceRow[] }) {
                         />
                         {r.hostname}
                       </Link>
+                      {r.noteCount > 0 && (
+                        <Link
+                          href={`/devices/${r.id}`}
+                          title={`${r.noteCount} note${r.noteCount === 1 ? "" : "s"} on this device`}
+                          style={{
+                            marginLeft: 6,
+                            display: "inline-block",
+                            padding: "1px 6px",
+                            background: "var(--color-background-tertiary)",
+                            borderRadius: 999,
+                            fontSize: 10.5,
+                            color: "var(--color-text-secondary)",
+                            textDecoration: "none",
+                          }}
+                        >
+                          📝 {r.noteCount}
+                        </Link>
+                      )}
                     </td>
                     <td style={tdStyle}>
                       <Link
