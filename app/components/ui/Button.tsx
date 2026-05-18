@@ -9,14 +9,18 @@ import type { ButtonHTMLAttributes, CSSProperties } from "react"
 // border on primary; 0.5px border on secondary/ghost.
 
 type Variant = "primary" | "secondary" | "danger" | "ghost"
-type Size = "sm" | "md"
+type Size = "xs" | "sm" | "md"
 
 interface Props extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "size"> {
   variant?: Variant
   size?: Size
 }
 
+// Phase 11 WS-E.2 — `xs` is the icon-button / inline-action size.
+// Closes the NotesCard / MfaChallengeForm hand-rolled iconBtn debt
+// the Phase-10 audit flagged.
 const SIZE: Record<Size, CSSProperties> = {
+  xs: { padding: "1px 6px", fontSize: "10.5px" },
   sm: { padding: "6px 12px", fontSize: "12px" },
   md: { padding: "8px 14px", fontSize: "13px" },
 }

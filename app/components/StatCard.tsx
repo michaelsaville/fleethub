@@ -14,9 +14,22 @@ interface StatCardProps {
   tone?: "neutral" | "ok" | "warn" | "danger"
   delta?: { dir: "up" | "down" | "flat"; text: string } | null
   hint?: string
+  /// Phase 11 WS-E.2 — "lg" (default) is the 28px dashboard headline
+  /// shape; "sm" is the 18px drill-down shape that previously lived
+  /// as 4 hand-rolled Tile widgets (software / clients/[name] /
+  /// reports / patches). Closes the Phase-10-deferred Tile clone debt.
+  size?: "sm" | "lg"
 }
 
-export default function StatCard({ label, value, href, tone = "neutral", delta, hint }: StatCardProps) {
+export default function StatCard({
+  label,
+  value,
+  href,
+  tone = "neutral",
+  delta,
+  hint,
+  size = "lg",
+}: StatCardProps) {
   const valueColor = {
     neutral: "var(--color-text-primary)",
     ok: "var(--color-success)",
@@ -24,12 +37,17 @@ export default function StatCard({ label, value, href, tone = "neutral", delta, 
     danger: "var(--color-danger)",
   }[tone]
 
+  const isLg = size === "lg"
+  const valueFontSize = isLg ? "28px" : "18px"
+  const cardPadding = isLg ? "16px 18px" : "10px 12px"
+  const labelMargin = isLg ? "8px" : "4px"
+
   return (
     <Link
       href={href}
       style={{
         display: "block",
-        padding: "16px 18px",
+        padding: cardPadding,
         background: "var(--color-background-secondary)",
         border: "0.5px solid var(--color-border-tertiary)",
         borderRadius: "10px",
@@ -45,13 +63,13 @@ export default function StatCard({ label, value, href, tone = "neutral", delta, 
           color: "var(--color-text-muted)",
           textTransform: "uppercase",
           letterSpacing: "0.07em",
-          marginBottom: "8px",
+          marginBottom: labelMargin,
         }}
       >
         {label}
       </div>
       <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
-        <div style={{ fontSize: "28px", fontWeight: 600, letterSpacing: "-0.02em", color: valueColor }}>
+        <div style={{ fontSize: valueFontSize, fontWeight: 600, letterSpacing: "-0.02em", color: valueColor }}>
           {value}
         </div>
         {delta && (
