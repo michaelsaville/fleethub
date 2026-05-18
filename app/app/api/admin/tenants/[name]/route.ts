@@ -58,6 +58,12 @@ export const PATCH = withAudit(
       fileTransferRequiresJustification?: boolean
       fileTransferMaxSizeMb?: number
       timezone?: string | null
+      // Phase 11 WS-B+D fields
+      bulkApprovalThreshold?: number
+      disclosureRequiresApproval?: boolean
+      shellApprovalTagsJson?: string | null
+      sessionMaxHours?: number
+      passwordExpiryDays?: number
     }
 
     if (
@@ -122,6 +128,53 @@ export const PATCH = withAudit(
     if (typeof body.fileTransferRequiresJustification === "boolean") data.fileTransferRequiresJustification = body.fileTransferRequiresJustification
     if (typeof body.fileTransferMaxSizeMb === "number") data.fileTransferMaxSizeMb = body.fileTransferMaxSizeMb
     if (body.timezone !== undefined) data.timezone = body.timezone
+    if (typeof body.bulkApprovalThreshold === "number") {
+      if (body.bulkApprovalThreshold < 1 || body.bulkApprovalThreshold > 100000) {
+        return NextResponse.json(
+          { error: "bulkApprovalThreshold must be 1–100000" },
+          { status: 400 },
+        )
+      }
+      data.bulkApprovalThreshold = body.bulkApprovalThreshold
+    }
+    if (typeof body.disclosureRequiresApproval === "boolean") {
+      data.disclosureRequiresApproval = body.disclosureRequiresApproval
+    }
+    if (body.shellApprovalTagsJson !== undefined) {
+      // Validate JSON shape: array of strings.
+      if (body.shellApprovalTagsJson !== null && body.shellApprovalTagsJson !== "") {
+        try {
+          const arr = JSON.parse(body.shellApprovalTagsJson) as unknown
+          if (!Array.isArray(arr) || !arr.every((x) => typeof x === "string")) {
+            throw new Error("not a string array")
+          }
+        } catch (e) {
+          return NextResponse.json(
+            { error: `shellApprovalTagsJson must be a JSON string array: ${e instanceof Error ? e.message : "parse error"}` },
+            { status: 400 },
+          )
+        }
+      }
+      data.shellApprovalTagsJson = body.shellApprovalTagsJson || null
+    }
+    if (typeof body.sessionMaxHours === "number") {
+      if (body.sessionMaxHours < 1 || body.sessionMaxHours > 168) {
+        return NextResponse.json(
+          { error: "sessionMaxHours must be 1–168" },
+          { status: 400 },
+        )
+      }
+      data.sessionMaxHours = body.sessionMaxHours
+    }
+    if (typeof body.passwordExpiryDays === "number") {
+      if (body.passwordExpiryDays < 0 || body.passwordExpiryDays > 3650) {
+        return NextResponse.json(
+          { error: "passwordExpiryDays must be 0–3650 (0 = no expiry)" },
+          { status: 400 },
+        )
+      }
+      data.passwordExpiryDays = body.passwordExpiryDays
+    }
 
     const tenant = await prisma.fl_Tenant.upsert({
       where: { name: tenantName },

@@ -68,6 +68,12 @@ export default async function ClientDetailPage({
         fileTransferRequiresJustification: true,
         fileTransferMaxSizeMb: true,
         timezone: true,
+        // Phase 11 WS-D
+        bulkApprovalThreshold: true,
+        disclosureRequiresApproval: true,
+        shellApprovalTagsJson: true,
+        sessionMaxHours: true,
+        passwordExpiryDays: true,
       },
     }),
   ])
@@ -117,6 +123,12 @@ export default async function ClientDetailPage({
               fileTransferRequiresJustification: tenantRow?.fileTransferRequiresJustification ?? true,
               fileTransferMaxSizeMb: tenantRow?.fileTransferMaxSizeMb ?? 100,
               timezone: tenantRow?.timezone ?? null,
+              // Phase 11 WS-D
+              bulkApprovalThreshold: tenantRow?.bulkApprovalThreshold ?? 50,
+              disclosureRequiresApproval: tenantRow?.disclosureRequiresApproval ?? false,
+              shellApprovalTagsJson: tenantRow?.shellApprovalTagsJson ?? null,
+              sessionMaxHours: tenantRow?.sessionMaxHours ?? 12,
+              passwordExpiryDays: tenantRow?.passwordExpiryDays ?? 0,
             }}
           />
         )}
