@@ -25,6 +25,7 @@
     "isomorphic-dompurify": "^3.13.0",
     "jszip": "^3.10.1",
     "marked": "^18.0.3",
+    "net-snmp": "^3.26.3",
     "next": "16.2.1",
     "next-auth": "^4.24.13",
     "otplib": "^13.4.0",
