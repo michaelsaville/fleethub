@@ -3,6 +3,12 @@ import { prisma } from "@/lib/prisma"
 import { requireAdmin } from "@/lib/authz"
 import { withAudit, addAuditDetail } from "@/lib/with-audit"
 import { rotate } from "@/lib/credential-vault"
+import {
+  shouldRequireApproval,
+  requireApproval,
+  consumeApproval,
+  hashPayload,
+} from "@/lib/approval-gate"
 
 // Phase 11 WS-A.8 — credential PATCH (rotation) and DELETE.
 
@@ -60,9 +66,53 @@ export const PATCH = withAudit(
       newPlaintext?: string
       label?: string
       rotateBy?: string | null
+      approvalId?: string
     }
     // Branch 1: rotate plaintext (full rewrap, replacedAt on old row).
     if (typeof body.newPlaintext === "string" && body.newPlaintext.length > 0) {
+      // Phase 11 WS-B.3 — if tenant policy demands, route through 4-eyes.
+      const cred = await prisma.fl_Credential.findFirst({
+        where: { id, replacedAt: null },
+        select: { tenantName: true, kind: true, label: true },
+      })
+      if (!cred) return NextResponse.json({ error: "not found" }, { status: 404 })
+      const gate = await shouldRequireApproval("credential.update", cred.tenantName)
+      if (gate.required) {
+        // Hash gates the metadata, not the plaintext (plaintext is by
+        // definition not yet known to the approver).
+        const gatedPayload = { id, kind: cred.kind }
+        const { hex: payloadHash } = hashPayload(gatedPayload)
+        if (!body.approvalId) {
+          const result = await requireApproval({
+            action: "credential.update",
+            tenantName: cred.tenantName,
+            payload: gatedPayload,
+            scope: `${cred.kind} · ${cred.label}`,
+            requestedBy: session.email,
+          })
+          addAuditDetail(req, {
+            approvalRequested: result.approvalId,
+            reason: gate.reason,
+          })
+          return NextResponse.json(
+            {
+              status: "approval-required",
+              approvalId: result.approvalId,
+              reason: gate.reason,
+            },
+            { status: 202 },
+          )
+        }
+        const consumed = await consumeApproval({
+          approvalId: body.approvalId,
+          action: "credential.update",
+          payloadHash,
+        })
+        if (!consumed.ok) {
+          return NextResponse.json({ error: consumed.reason }, { status: consumed.status })
+        }
+        addAuditDetail(req, { approvalConsumed: body.approvalId })
+      }
       const rotated = await rotate({
         credentialId: id,
         newPlaintext: body.newPlaintext,

@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { requireAdmin } from "@/lib/authz"
-import { withAudit } from "@/lib/with-audit"
+import { withAudit, addAuditDetail } from "@/lib/with-audit"
 import { dispatchToAgent } from "@/lib/agent-dispatch"
+import {
+  shouldRequireApproval,
+  requireApproval,
+  consumeApproval,
+  hashPayload,
+} from "@/lib/approval-gate"
 
 // Phase 9 WS-D §6.1 — open an interactive shell session.
 //
@@ -18,11 +24,20 @@ export const POST = withAudit(
   async (req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
     const session = await requireAdmin()
     const { id } = await params
-    const body = (await req.json().catch(() => ({}))) as { justification?: string }
+    const body = (await req.json().catch(() => ({}))) as {
+      justification?: string
+      approvalId?: string
+    }
 
     const device = await prisma.fl_Device.findUnique({
       where: { id },
-      select: { id: true, clientName: true, agentId: true, isOnline: true },
+      select: {
+        id: true,
+        clientName: true,
+        agentId: true,
+        isOnline: true,
+        role: true,
+      },
     })
     if (!device) return NextResponse.json({ error: "device not found" }, { status: 404 })
     if (!device.agentId) return NextResponse.json({ error: "device has no enrolled agent" }, { status: 400 })
@@ -37,6 +52,48 @@ export const POST = withAudit(
     }
     if (tenant.shellRequiresJustification && !body.justification?.trim()) {
       return NextResponse.json({ error: "justification required by tenant policy" }, { status: 400 })
+    }
+
+    // Phase 11 WS-B.3 — peer-approval gate when the device's role
+    // matches the tenant's shellApprovalTags allowlist. role is
+    // free-form ("DC", "workstation", "finance", "prod", …); a
+    // single-role match suffices.
+    const gatedPayload = {
+      deviceId: device.id,
+      justification: body.justification?.trim() ?? null,
+    }
+    const { hex: payloadHash } = hashPayload(gatedPayload)
+    const gate = await shouldRequireApproval("shell.open", device.clientName, {
+      deviceTags: device.role ? [device.role] : [],
+    })
+    if (gate.required) {
+      if (!body.approvalId) {
+        const result = await requireApproval({
+          action: "shell.open",
+          tenantName: device.clientName,
+          payload: gatedPayload,
+          scope: `${device.id} · role=${device.role ?? "<none>"}`,
+          requestedBy: session.email,
+        })
+        addAuditDetail(req, { approvalRequested: result.approvalId, reason: gate.reason })
+        return NextResponse.json(
+          {
+            status: "approval-required",
+            approvalId: result.approvalId,
+            reason: gate.reason,
+          },
+          { status: 202 },
+        )
+      }
+      const consumed = await consumeApproval({
+        approvalId: body.approvalId,
+        action: "shell.open",
+        payloadHash,
+      })
+      if (!consumed.ok) {
+        return NextResponse.json({ error: consumed.reason }, { status: consumed.status })
+      }
+      addAuditDetail(req, { approvalConsumed: body.approvalId })
     }
 
     const created = await prisma.fl_ShellSession.create({

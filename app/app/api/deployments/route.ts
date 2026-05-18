@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireSession } from "@/lib/authz"
 import { createDeployment } from "@/lib/deployments"
-import { withAudit } from "@/lib/with-audit"
+import { withAudit, addAuditDetail } from "@/lib/with-audit"
 import { resolveGroupTargets } from "@/lib/targeting"
+import {
+  shouldRequireApproval,
+  requireApproval,
+  consumeApproval,
+  hashPayload,
+} from "@/lib/approval-gate"
 
 // POST /api/deployments
 // Body: {
@@ -25,6 +31,7 @@ export const POST = withAudit({ action: "deployment.create" }, async (req: NextR
     scheduledFor?: string | null
     targetDeviceIds?: string[]
     targetGroupId?: string
+    approvalId?: string
   }
   // Phase 10 WS-A §3.5 — resolve groupId into deviceIds. Group +
   // explicit list both provided: explicit list wins (operator
@@ -54,6 +61,56 @@ export const POST = withAudit({ action: "deployment.create" }, async (req: NextR
       { status: 400 },
     )
   }
+
+  // Phase 11 WS-B.3 — bulk.dispatch gate. Triggered when resolved
+  // deviceIds count exceeds tenant.bulkApprovalThreshold, OR when
+  // action='uninstall' on any count (architect: uninstall is
+  // destructive regardless of count).
+  const sortedIds = [...deviceIds].sort()
+  const gatedPayload = {
+    tenantName: body.tenantName,
+    packageId: body.packageId,
+    packageVersionId: body.packageVersionId,
+    ringId: body.ringId,
+    action: body.action,
+    deviceIds: sortedIds,
+    dryRun: body.dryRun ?? false,
+  }
+  const { hex: payloadHash } = hashPayload(gatedPayload)
+  const uninstallGate = body.action === "uninstall"
+  const sizeGate = await shouldRequireApproval("bulk.dispatch", body.tenantName, {
+    deviceCount: deviceIds.length,
+  })
+  const required = uninstallGate || sizeGate.required
+  if (required) {
+    if (!body.approvalId) {
+      const reason = uninstallGate
+        ? "uninstall action requires peer review (destructive)"
+        : sizeGate.reason
+      const result = await requireApproval({
+        action: "bulk.dispatch",
+        tenantName: body.tenantName,
+        payload: gatedPayload,
+        scope: `${body.action} · ${deviceIds.length} devices`,
+        requestedBy: session.email,
+      })
+      addAuditDetail(req, { approvalRequested: result.approvalId, reason })
+      return NextResponse.json(
+        { status: "approval-required", approvalId: result.approvalId, reason },
+        { status: 202 },
+      )
+    }
+    const consumed = await consumeApproval({
+      approvalId: body.approvalId,
+      action: "bulk.dispatch",
+      payloadHash,
+    })
+    if (!consumed.ok) {
+      return NextResponse.json({ error: consumed.reason }, { status: consumed.status })
+    }
+    addAuditDetail(req, { approvalConsumed: body.approvalId })
+  }
+
   try {
     const deployment = await createDeployment({
       tenantName: body.tenantName,

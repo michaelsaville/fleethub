@@ -5,6 +5,12 @@ import { prisma } from "@/lib/prisma"
 import { withAudit, addAuditDetail } from "@/lib/with-audit"
 import { unseal } from "@/lib/credential-vault"
 import { consumeStepUp } from "@/lib/step-up"
+import {
+  shouldRequireApproval,
+  requireApproval,
+  consumeApproval,
+  hashPayload,
+} from "@/lib/approval-gate"
 
 // Phase 11 WS-A.7 — credential disclose. The plaintext path.
 //
@@ -45,6 +51,7 @@ export const POST = withAudit(
     const body = (await req.json().catch(() => ({}))) as {
       justification?: string
       context?: string
+      approvalId?: string
     }
     const justification = body.justification?.trim() ?? ""
     if (!justification) {
@@ -57,27 +64,48 @@ export const POST = withAudit(
     // Load credential first so we can audit even on tenant policy gate.
     const cred = await prisma.fl_Credential.findFirst({
       where: { id, replacedAt: null },
-      select: { id: true, tenantName: true },
+      select: { id: true, tenantName: true, label: true, kind: true },
     })
     if (!cred) return NextResponse.json({ error: "not found" }, { status: 404 })
 
     // Tenant policy gate. v1: when disclosureRequiresApproval=true,
-    // route refuses unless WS-B.3 has wired an approval token. v1
-    // ships the refusal so the policy starts working immediately;
-    // WS-B.3 unlocks the approve path on the same release wave.
-    const tenant = await prisma.fl_Tenant.findUnique({
-      where: { name: cred.tenantName },
-      select: { disclosureRequiresApproval: true },
-    })
-    if (tenant?.disclosureRequiresApproval) {
-      const hasApproval = req.headers.get("X-FleetHub-Approval") != null
-      if (!hasApproval) {
+    // the request goes through 4-eyes. WS-B.3 produces the approval
+    // on first call (returns 202) and consumes it on second call
+    // (body.approvalId present).
+    const gate = await shouldRequireApproval(
+      "credential.disclose",
+      cred.tenantName,
+    )
+    if (gate.required) {
+      const gatedPayload = { id, kind: cred.kind }
+      const { hex: payloadHash } = hashPayload(gatedPayload)
+      if (!body.approvalId) {
+        const result = await requireApproval({
+          action: "credential.disclose",
+          tenantName: cred.tenantName,
+          payload: gatedPayload,
+          scope: `${cred.kind} · ${cred.label}`,
+          requestedBy: userEmail,
+        })
+        addAuditDetail(req, { approvalRequested: result.approvalId, reason: gate.reason })
         return NextResponse.json(
-          { error: "tenant requires peer approval — POST /api/approvals first" },
-          { status: 403 },
+          {
+            status: "approval-required",
+            approvalId: result.approvalId,
+            reason: gate.reason,
+          },
+          { status: 202 },
         )
       }
-      // WS-B.3 will verify the approval token here.
+      const consumed = await consumeApproval({
+        approvalId: body.approvalId,
+        action: "credential.disclose",
+        payloadHash,
+      })
+      if (!consumed.ok) {
+        return NextResponse.json({ error: consumed.reason }, { status: consumed.status })
+      }
+      addAuditDetail(req, { approvalConsumed: body.approvalId })
     }
 
     const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null

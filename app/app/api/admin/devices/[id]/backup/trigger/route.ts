@@ -6,6 +6,13 @@ import { dispatchToAgent } from "@/lib/agent-dispatch"
 
 // Phase 9 WS-C §5.4 — operator-initiated backup trigger. Per-tenant
 // gate via Fl_Tenant.backupTriggerEnabled + optional justification.
+//
+// Phase 11 WS-B.4 — deliberately NOT routed through 4-eyes approval.
+// Per architect gut-check on Phase 11 design: gating reversible
+// operations (a backup is additive, no destructive side-effect)
+// breeds approval fatigue and kills the muscle. Audit-only is the
+// right tier here. shell.open / credential.disclose / bulk dispatch
+// carry the gate; backup.trigger does not.
 
 export const dynamic = "force-dynamic"
 

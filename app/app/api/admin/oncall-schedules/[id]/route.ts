@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { requireAdmin } from "@/lib/authz"
 import { validateSchedulePayload } from "@/lib/oncall-validate"
-import { withAudit } from "@/lib/with-audit"
+import { withAudit, addAuditDetail } from "@/lib/with-audit"
+import {
+  requireApproval,
+  consumeApproval,
+  hashPayload,
+} from "@/lib/approval-gate"
 
 export const dynamic = "force-dynamic"
 
@@ -33,9 +38,40 @@ export const PATCH = withAudit(
 
 export const DELETE = withAudit(
   { action: "oncallSchedule.delete" },
-  async (_req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
-    await requireAdmin()
+  async (req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
+    const session = await requireAdmin()
     const { id } = await params
+
+    // Phase 11 WS-B.3 — oncall-schedule.delete is always gated.
+    const approvalId = req.nextUrl.searchParams.get("approvalId") ?? undefined
+    const existing = await prisma.fl_OncallSchedule.findUnique({ where: { id } })
+    if (!existing) return NextResponse.json({ error: "schedule not found" }, { status: 404 })
+    const gatedPayload = { id }
+    const { hex: payloadHash } = hashPayload(gatedPayload)
+    if (!approvalId) {
+      const result = await requireApproval({
+        action: "oncall-schedule.delete",
+        tenantName: "__global__",
+        payload: gatedPayload,
+        scope: existing.name,
+        requestedBy: session.email,
+      })
+      addAuditDetail(req, { approvalRequested: result.approvalId })
+      return NextResponse.json(
+        { status: "approval-required", approvalId: result.approvalId },
+        { status: 202 },
+      )
+    }
+    const consumed = await consumeApproval({
+      approvalId,
+      action: "oncall-schedule.delete",
+      payloadHash,
+    })
+    if (!consumed.ok) {
+      return NextResponse.json({ error: consumed.reason }, { status: consumed.status })
+    }
+    addAuditDetail(req, { approvalConsumed: approvalId })
+
     // Check whether any active alert routes reference this schedule
     // before deleting — orphaning a channel mid-flight is a silent
     // failure mode operators won't notice until an alert misroutes.
