@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { DeviceRow } from "@/lib/devices"
 import { relativeLastSeen } from "@/lib/devices-time"
+import { submitWithApproval } from "@/lib/client/submit-with-approval"
 
 /**
  * Client-side table for /devices. Owns:
@@ -311,19 +312,23 @@ function BulkBar({ count, selectedIds, onClear }: { count: number; selectedIds: 
     setBusy(on ? "on" : "off")
     setErr(null)
     try {
-      const res = await fetch("/api/devices/maintenance/bulk", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+      // Phase 12 WS-E.3 — submitWithApproval handles the 202+approvalId
+      // path when count exceeds tenant.bulkApprovalThreshold. Without
+      // this, the BulkBar silently treated 202 as success.
+      const result = await submitWithApproval("/api/devices/maintenance/bulk", {
+        body: {
           deviceIds: selectedIds,
           on,
           until: on ? new Date(Date.now() + 4 * 60 * 60_000).toISOString() : null,
           reason: on ? "bulk via /devices BulkBar" : null,
-        }),
+        },
       })
-      if (!res.ok) {
-        const j = (await res.json().catch(() => ({}))) as { error?: string }
-        setErr(j.error ?? `HTTP ${res.status}`)
+      if (result.kind === "approval-required") {
+        setErr(
+          `Awaiting peer approval (${result.approvalId.slice(0, 8)}…) — open /approvals`,
+        )
+      } else if (result.kind === "error") {
+        setErr(result.message)
       } else {
         router.refresh()
       }
