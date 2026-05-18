@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import type { DeviceRow } from "@/lib/devices"
 import { relativeLastSeen } from "@/lib/devices-time"
 import { submitWithApproval } from "@/lib/client/submit-with-approval"
+import { StatusDot } from "@/components/ui/StatusDot"
 
 /**
  * Client-side table for /devices. Owns:
@@ -193,18 +194,10 @@ export default function DeviceTable({ rows }: { rows: DeviceRow[] }) {
                         href={`/devices/${r.id}`}
                         style={{ color: "var(--color-text-primary)", textDecoration: "none", fontWeight: 500 }}
                       >
-                        <span
-                          aria-label={r.isOnline ? "online" : "offline"}
-                          title={r.isOnline ? "online" : "offline"}
-                          style={{
-                            display: "inline-block",
-                            width: "7px",
-                            height: "7px",
-                            borderRadius: "999px",
-                            marginRight: "8px",
-                            background: r.isOnline ? "var(--color-success)" : "var(--color-text-muted)",
-                            verticalAlign: "middle",
-                          }}
+                        <StatusDot
+                          tone={r.isOnline ? "ok" : "muted"}
+                          label={r.isOnline ? "online" : "offline"}
+                          style={{ marginRight: 8 }}
                         />
                         {r.hostname}
                       </Link>

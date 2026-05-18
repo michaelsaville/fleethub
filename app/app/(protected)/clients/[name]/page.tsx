@@ -3,6 +3,7 @@ import { notFound } from "next/navigation"
 import AppShell from "@/components/AppShell"
 import ActivityFeed from "@/components/ActivityFeed"
 import SeedBanner from "@/components/SeedBanner"
+import { StatusDot } from "@/components/ui/StatusDot"
 import { TYPOGRAPHY } from "@/lib/ui-tokens"
 import { listAlerts } from "@/lib/alerts"
 import { getClient, getClientActivity } from "@/lib/clients"
@@ -370,16 +371,10 @@ function DevicesTab({ devices }: { devices: DeviceRow[] }) {
             <tr key={d.id} style={{ borderTop: "0.5px solid var(--color-border-tertiary)" }}>
               <td style={tdStyle}>
                 <Link href={`/devices/${d.id}`} style={{ color: "var(--color-text-primary)", textDecoration: "none", fontWeight: 500 }}>
-                  <span
-                    style={{
-                      display: "inline-block",
-                      width: "7px",
-                      height: "7px",
-                      borderRadius: "999px",
-                      marginRight: "8px",
-                      background: d.isOnline ? "var(--color-success)" : "var(--color-text-muted)",
-                      verticalAlign: "middle",
-                    }}
+                  <StatusDot
+                    tone={d.isOnline ? "ok" : "muted"}
+                    label={d.isOnline ? "online" : "offline"}
+                    style={{ marginRight: 8 }}
                   />
                   {d.hostname}
                 </Link>
