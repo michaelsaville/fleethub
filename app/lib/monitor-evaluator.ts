@@ -47,7 +47,7 @@ interface DeviceRow {
   os: string | null
 }
 
-type MetricResolver = (deviceId: string, windowMin: number) => Promise<number[] | null>
+type MetricBatchResolver = (deviceIds: string[], windowMin: number) => Promise<Map<string, number[]>>
 
 // Performance-sample lookups use the 1h window rows. The evaluator
 // looks back N minutes; we filter samples whose windowStart is
@@ -57,27 +57,39 @@ type MetricResolver = (deviceId: string, windowMin: number) => Promise<number[] 
 // Sub-hour granularity lands when the agent emits finer-grain rows.
 const PERF_WINDOW = "1h"
 
-async function readPerf(
-  deviceId: string,
+// Phase 9 WS-B §4.4 — batched read across all devices for one
+// metric+window. Replaces the per-device readPerf the n+1 audit
+// flagged: previously 100 hosts × 5 monitors → 500 sample queries
+// per minute. Now: 1 query per monitor.
+async function readPerfBatch(
+  deviceIds: string[],
   windowMin: number,
   field: "cpuAvgPct" | "cpuP95Pct" | "ramAvgPct" | "ramP95Pct" | "diskUsedPct",
-): Promise<number[] | null> {
+): Promise<Map<string, number[]>> {
+  if (deviceIds.length === 0) return new Map()
   const since = new Date(Date.now() - windowMin * 60_000)
   const samples = await prisma.fl_PerformanceSample.findMany({
-    where: { deviceId, window: PERF_WINDOW, windowStart: { gte: since } },
+    where: { deviceId: { in: deviceIds }, window: PERF_WINDOW, windowStart: { gte: since } },
     orderBy: { windowStart: "asc" },
-    select: { [field]: true } as Record<string, boolean>,
+    select: { deviceId: true, [field]: true } as Record<string, boolean>,
   })
-  if (samples.length === 0) return null
-  return samples.map((s) => Number((s as unknown as Record<string, number>)[field]))
+  const byDevice = new Map<string, number[]>()
+  for (const s of samples) {
+    const row = s as unknown as Record<string, unknown>
+    const id = String(row.deviceId)
+    const arr = byDevice.get(id) ?? []
+    arr.push(Number(row[field]))
+    byDevice.set(id, arr)
+  }
+  return byDevice
 }
 
-const METRIC_RESOLVERS: Record<string, MetricResolver> = {
-  "perf.cpu.avg":      (id, w) => readPerf(id, w, "cpuAvgPct"),
-  "perf.cpu.p95":      (id, w) => readPerf(id, w, "cpuP95Pct"),
-  "perf.ram.avg":      (id, w) => readPerf(id, w, "ramAvgPct"),
-  "perf.ram.p95":      (id, w) => readPerf(id, w, "ramP95Pct"),
-  "perf.disk.percent": (id, w) => readPerf(id, w, "diskUsedPct"),
+const METRIC_RESOLVERS: Record<string, MetricBatchResolver> = {
+  "perf.cpu.avg":      (ids, w) => readPerfBatch(ids, w, "cpuAvgPct"),
+  "perf.cpu.p95":      (ids, w) => readPerfBatch(ids, w, "cpuP95Pct"),
+  "perf.ram.avg":      (ids, w) => readPerfBatch(ids, w, "ramAvgPct"),
+  "perf.ram.p95":      (ids, w) => readPerfBatch(ids, w, "ramP95Pct"),
+  "perf.disk.percent": (ids, w) => readPerfBatch(ids, w, "diskUsedPct"),
 }
 
 export const SUPPORTED_METRICS = Object.keys(METRIC_RESOLVERS)
@@ -159,11 +171,30 @@ export async function evaluateMonitors(now: Date = new Date()): Promise<Evaluati
       summary.monitorsEvaluated += 1
       let monitorFiresThisRun = 0
 
-      for (const d of devices) {
-        if (!osMatches(d.os, predicate.osFilter)) continue
-        // deviceTag filter deferred to when Fl_DeviceTag lands.
+      // Phase 9 WS-B §4.4 — batch sample lookup for ALL devices in
+      // this monitor's scope, in one query, before iterating. Plus
+      // a single cooldown-recent-fires lookup so the per-device
+      // cooldown check has data without n+1 round-trips.
+      const matchingDevices = devices.filter((d) => osMatches(d.os, predicate.osFilter))
+      const samplesByDevice = await resolver(matchingDevices.map((d) => d.id), windowMin)
+      const cooldownRecent = new Set<string>()
+      if (m.cooldownMin > 0 && matchingDevices.length > 0) {
+        const cooldownStart = new Date(now.getTime() - m.cooldownMin * 60_000)
+        const recentFires = await prisma.fl_MonitorFire.findMany({
+          where: {
+            monitorId: m.id,
+            deviceId: { in: matchingDevices.map((d) => d.id) },
+            firedAt: { gte: cooldownStart },
+          },
+          select: { deviceId: true },
+          distinct: ["deviceId"],
+        })
+        for (const r of recentFires) cooldownRecent.add(r.deviceId)
+      }
 
-        const samples = await resolver(d.id, windowMin)
+      for (const d of matchingDevices) {
+        // deviceTag filter deferred to when Fl_DeviceTag lands.
+        const samples = samplesByDevice.get(d.id)
         if (!samples || samples.length === 0) {
           summary.firesSkippedNoData += 1
           continue
@@ -174,20 +205,18 @@ export async function evaluateMonitors(now: Date = new Date()): Promise<Evaluati
         const sustained = samples.every((v) => compare(v, predicate.operator, predicate.value))
         if (!sustained) continue
 
-        // Cooldown lookup per (monitor, device).
-        if (m.cooldownMin > 0) {
-          const cooldownStart = new Date(now.getTime() - m.cooldownMin * 60_000)
-          const recent = await prisma.$queryRaw<{ id: string }[]>`
-            SELECT id FROM fleethub.fl_monitor_fires
-            WHERE "monitorId" = ${m.id}
-              AND "deviceId"  = ${d.id}
-              AND "firedAt" >= ${cooldownStart}
-            LIMIT 1
-          `
-          if (recent.length > 0) {
-            summary.firesSkippedCooldown += 1
-            continue
-          }
+        // Cooldown decision — comes from the pre-batched Set built
+        // above (Phase 9 WS-B §4.4 n+1 fix). No per-device DB query;
+        // race-safety is preserved by the per-fire $transaction +
+        // advisory lock below that gates the actual fire-record
+        // create on a unique (monitor, device, firedAt-floored)
+        // index where applicable. v1 trades cooldown-decision
+        // strict-monotonicity for batch-read perf — concurrent ticks
+        // can both pass cooldown and both call writeAlert, but the
+        // writeAlert path has its own dedup window covering that.
+        if (m.cooldownMin > 0 && cooldownRecent.has(d.id)) {
+          summary.firesSkippedCooldown += 1
+          continue
         }
 
         const observed = samples[samples.length - 1]

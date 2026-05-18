@@ -20,9 +20,17 @@ export function withCronAuth<Req extends Request = Request>(
   handler: CronHandler<Req>,
 ): (req: Req, ctx: { params: Promise<Record<string, string>> }) => Promise<NextResponse | Response> {
   return async function (req, ctx) {
-    const secret = process.env.FLEETHUB_AGENT_SECRET ?? ""
+    // Phase 9 WS-B §4.5 — prefer FLEETHUB_CRON_SECRET. Falls back
+    // to FLEETHUB_AGENT_SECRET for one release so existing
+    // deployments don't break on upgrade. Operators rotate the
+    // agent secret without invalidating cron / thumbnail / ack URLs.
+    const cronSecret = process.env.FLEETHUB_CRON_SECRET ?? ""
+    const agentSecret = process.env.FLEETHUB_AGENT_SECRET ?? ""
     const auth = req.headers.get("authorization") ?? ""
-    if (!secret || auth !== `Bearer ${secret}`) {
+    const valid =
+      (cronSecret.length > 0 && auth === `Bearer ${cronSecret}`) ||
+      (agentSecret.length > 0 && auth === `Bearer ${agentSecret}`)
+    if (!valid) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 })
     }
     return handler(req, ctx)

@@ -32,3 +32,30 @@ export function normalizeMatch(raw: unknown): MatchPredicate {
   if (parsed.kindLike) out.kindLike = parsed.kindLike
   return out
 }
+
+/// Phase 9 WS-B §4.2 — read-side safe parse for JSON-stored
+/// matchJson. Returns a discriminated result so callers can surface
+/// the reason as an audit row rather than silently `continue`-ing.
+///
+/// Write-side validation enforces the shape; this guards against
+/// manual SQL fixes, enum additions, or pre-validator legacy rows.
+export type SafeParseMatchResult =
+  | { ok: true; predicate: MatchPredicate }
+  | { ok: false; reason: string }
+
+export function safeParseMatchJson(json: string): SafeParseMatchResult {
+  let raw: unknown
+  try {
+    raw = JSON.parse(json)
+  } catch (err) {
+    return { ok: false, reason: `JSON parse failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+  const parsed = MatchPredicate.safeParse(raw)
+  if (!parsed.success) {
+    return {
+      ok: false,
+      reason: `match shape mismatch: ${parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ")}`,
+    }
+  }
+  return { ok: true, predicate: parsed.data }
+}

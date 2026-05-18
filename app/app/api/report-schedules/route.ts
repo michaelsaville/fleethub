@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma"
 import { requireSession } from "@/lib/authz"
 import { SUPPORTED_KINDS, type ReportKind } from "@/lib/reports/render"
 import { isValidWebhookUrl } from "@/lib/webhook-delivery"
+import { withAudit } from "@/lib/with-audit"
 
 // CRUD over Fl_ReportSchedule. v1 = list + create + delete (delete via
 // the [id] route below). Edit deferred — operators can delete and
@@ -26,7 +27,7 @@ export async function GET() {
   return NextResponse.json({ schedules })
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withAudit({ action: "reportSchedule.create" }, async (req: NextRequest) => {
   const session = await requireSession()
   const body = (await req.json().catch(() => ({}))) as {
     tenantName?: string
@@ -131,4 +132,4 @@ export async function POST(req: NextRequest) {
     },
   })
   return NextResponse.json(schedule, { status: 201 })
-}
+})

@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireSession } from "@/lib/authz"
 import { bulkSetMaintenance } from "@/lib/maintenance"
+import { withAudit } from "@/lib/with-audit"
 
 // POST /api/devices/maintenance/bulk
 // Body: { deviceIds: string[], on: boolean, until?: ISO, reason?: string }
-export async function POST(req: NextRequest) {
+export const POST = withAudit({ action: "device.maintenance.bulk" }, async (req: NextRequest) => {
   const session = await requireSession()
   const body = (await req.json().catch(() => ({}))) as {
     deviceIds?: string[]
@@ -29,4 +30,4 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
-}
+})

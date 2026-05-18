@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireAdmin } from "@/lib/authz"
 import { createRing, type RingStage } from "@/lib/rings"
+import { withAudit } from "@/lib/with-audit"
 
-export async function POST(req: NextRequest) {
+export const POST = withAudit({ action: "ring.create" }, async (req: NextRequest) => {
   const session = await requireAdmin()
   const body = (await req.json().catch(() => ({}))) as {
     tenantName?: string
@@ -31,4 +32,4 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     )
   }
-}
+})

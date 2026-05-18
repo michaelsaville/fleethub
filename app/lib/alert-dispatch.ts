@@ -2,6 +2,7 @@ import "server-only"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { ALERT_CHANNEL_ADAPTERS } from "@/lib/alert-channels"
+import { safeParseMatchJson } from "@/lib/schemas/match"
 import {
   matchesAlert,
   parseEscalationChain,
@@ -117,12 +118,17 @@ export async function dispatchAlert(alert: Fl_Alert): Promise<void> {
   })
 
   for (const r of routes) {
-    let predicate: MatchPredicate
-    try {
-      predicate = JSON.parse(r.matchJson) as MatchPredicate
-    } catch {
+    const parsed = safeParseMatchJson(r.matchJson)
+    if (!parsed.ok) {
+      // Phase 9 WS-B §4.2 — surface silent drops via audit row.
+      await writeAudit({
+        action: "route.skip.malformed",
+        outcome: "error",
+        detail: { routeId: r.id, reason: parsed.reason },
+      }).catch(() => {})
       continue
     }
+    const predicate: MatchPredicate = parsed.predicate
     if (!matchesAlert(predicate, alert)) continue
 
     // Dedup: was there a recent dispatch for this (alert.kind,

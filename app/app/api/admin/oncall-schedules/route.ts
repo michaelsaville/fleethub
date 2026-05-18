@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { requireAdmin } from "@/lib/authz"
 import { validateSchedulePayload } from "@/lib/oncall-validate"
+import { withAudit } from "@/lib/with-audit"
 
 export const dynamic = "force-dynamic"
 
-export async function POST(req: NextRequest) {
+export const POST = withAudit({ action: "oncallSchedule.create" }, async (req: NextRequest) => {
   await requireAdmin()
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
   const v = validateSchedulePayload(body)
@@ -21,4 +22,4 @@ export async function POST(req: NextRequest) {
     select: { id: true },
   })
   return NextResponse.json({ id: created.id }, { status: 201 })
-}
+})

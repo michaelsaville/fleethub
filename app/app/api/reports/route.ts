@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { requireSession } from "@/lib/authz"
 import { SUPPORTED_KINDS, type ReportKind } from "@/lib/reports/render"
+import { withAudit } from "@/lib/with-audit"
 
 // GET — list recent reports, newest first.
 // Filterable by tenantName / kind via query string.
@@ -24,7 +25,7 @@ export async function GET(req: NextRequest) {
 
 // POST — create a new report row in state="queued".
 // Body: { kind, tenantName, audience?, asOf? (ISO), startDate?, endDate?, format? }
-export async function POST(req: NextRequest) {
+export const POST = withAudit({ action: "report.create" }, async (req: NextRequest) => {
   const session = await requireSession()
   const body = (await req.json().catch(() => ({}))) as {
     kind?: string
@@ -76,4 +77,4 @@ export async function POST(req: NextRequest) {
     },
   })
   return NextResponse.json(report, { status: 201 })
-}
+})

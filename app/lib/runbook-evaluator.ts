@@ -2,6 +2,7 @@ import "server-only"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { matchesAlert } from "@/lib/alert-dispatch"
+import { safeParseMatchJson } from "@/lib/schemas/match"
 import type { Fl_Alert } from "@prisma/client"
 
 // Phase 7 Workstream B step 1 — runbook evaluator.
@@ -44,12 +45,17 @@ export async function evaluateRunbooksForAlert(alert: Fl_Alert): Promise<void> {
 
   const now = Date.now()
   for (const r of candidates) {
-    let predicate: MatchPredicate
-    try {
-      predicate = JSON.parse(r.matchJson) as MatchPredicate
-    } catch {
+    const parsed = safeParseMatchJson(r.matchJson)
+    if (!parsed.ok) {
+      // Phase 9 WS-B §4.2 — surface silent drops via audit row.
+      await writeAudit({
+        action: "runbook.skip.malformed",
+        outcome: "error",
+        detail: { runbookId: r.id, reason: parsed.reason },
+      }).catch(() => {})
       continue
     }
+    const predicate: MatchPredicate = parsed.predicate
     if (!matchesAlert(predicate, alert)) continue
 
     // Cooldown: any recent Fl_RunbookFire for THIS runbook on
@@ -58,33 +64,44 @@ export async function evaluateRunbooksForAlert(alert: Fl_Alert): Promise<void> {
     // cooldown is per (kind, device), not per alert, so flapping
     // alerts of the same kind on the same host don't keep firing
     // remediations.
+    //
+    // Phase 9 WS-B §4.3 — wrap the findFirst + create in a
+    // transaction with a pg_advisory_xact_lock keyed by
+    // (runbookId, deviceId, alertKind) so two concurrent ticks
+    // can't both pass the gate and double-fire.
     if (r.cooldownMin > 0) {
       const since = new Date(now - r.cooldownMin * 60_000)
-      const recent = await prisma.fl_RunbookFire.findFirst({
-        where: {
-          runbookId: r.id,
-          deviceId: alert.deviceId,
-          alertKind: alert.kind,
-          createdAt: { gte: since },
-          state: { notIn: ["skipped-cooldown"] },
-        },
-        select: { id: true },
-      })
-      if (recent) {
-        await prisma.fl_RunbookFire.create({
-          data: {
+      const lockKey = `${r.id}|${alert.deviceId ?? ""}|${alert.kind}`
+      const cooldownHit = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`
+        const recent = await tx.fl_RunbookFire.findFirst({
+          where: {
             runbookId: r.id,
-            alertId: alert.id,
-            deviceId: alert.deviceId,
+            deviceId: alert.deviceId!, // guarded by early `if (!alert.deviceId) return`
             alertKind: alert.kind,
-            scheduledAt: new Date(now),
-            state: "skipped-cooldown",
-            completedAt: new Date(now),
-            failureReason: `cooldown (${r.cooldownMin}m) — last fire within window`,
+            createdAt: { gte: since },
+            state: { notIn: ["skipped-cooldown"] },
           },
+          select: { id: true },
         })
-        continue
-      }
+        if (recent) {
+          await tx.fl_RunbookFire.create({
+            data: {
+              runbookId: r.id,
+              alertId: alert.id,
+              deviceId: alert.deviceId!,
+              alertKind: alert.kind,
+              scheduledAt: new Date(now),
+              state: "skipped-cooldown",
+              completedAt: new Date(now),
+              failureReason: `cooldown (${r.cooldownMin}m) — last fire within window`,
+            },
+          })
+          return true
+        }
+        return false
+      })
+      if (cooldownHit) continue
     }
 
     // Circuit breaker — max fires per rolling hour across the fleet

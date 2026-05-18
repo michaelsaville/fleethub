@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireAdmin } from "@/lib/authz"
 import { createPackage, mockParseArtifact } from "@/lib/packages"
+import { withAudit } from "@/lib/with-audit"
 
 // POST /api/packages
 // Body: { tenantName, name, source, sourceId, os, scope?, category?,
 //         silentInstallArgs?, detectionRule?, initialVersion?,
 //         /** custom-only: filename to mock-parse */
 //         parseFromFilename? }
-export async function POST(req: NextRequest) {
+export const POST = withAudit({ action: "package.create" }, async (req: NextRequest) => {
   const session = await requireAdmin()
   const body = (await req.json().catch(() => ({}))) as {
     tenantName?: string
@@ -67,4 +68,4 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     )
   }
-}
+})

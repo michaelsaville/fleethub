@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireSession } from "@/lib/authz"
 import { createDeployment } from "@/lib/deployments"
+import { withAudit } from "@/lib/with-audit"
 
 // POST /api/deployments
 // Body: {
 //   tenantName, packageId, packageVersionId, ringId, action,
 //   dryRun?, rebootPolicyOverride?, scheduledFor?, targetDeviceIds[]
 // }
-export async function POST(req: NextRequest) {
+export const POST = withAudit({ action: "deployment.create" }, async (req: NextRequest) => {
   const session = await requireSession()
   const body = (await req.json().catch(() => ({}))) as {
     tenantName?: string
@@ -54,4 +55,4 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     )
   }
-}
+})
