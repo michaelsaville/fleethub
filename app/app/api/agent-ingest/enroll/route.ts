@@ -72,6 +72,7 @@ export async function POST(req: NextRequest) {
       agentId: result.agentId,
       agentSecret: result.agentSecret,
       fleethubBaseUrl: result.fleethubBaseUrl,
+      gatewayUrl: result.gatewayUrl,
       tenantName: result.tenantName,
     },
     { status: 201 },

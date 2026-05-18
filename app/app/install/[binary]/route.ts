@@ -30,6 +30,12 @@ const BINARY_ALLOWLIST: Record<string, { file: string; contentType: string }> = 
     file: "pcc2k-agent.exe",
     contentType: "application/octet-stream",
   },
+  // bootstrap.ps1 requests the .exe-suffixed name natively in
+  // PowerShell — both forms resolve to the same file.
+  "pcc2k-agent-windows-amd64.exe": {
+    file: "pcc2k-agent.exe",
+    contentType: "application/octet-stream",
+  },
   "pcc2k-agent-darwin-amd64": {
     file: "pcc2k-agent-darwin",
     contentType: "application/octet-stream",

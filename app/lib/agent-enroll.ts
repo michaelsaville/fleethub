@@ -2,6 +2,7 @@ import "server-only"
 import { randomBytes } from "node:crypto"
 import bcrypt from "bcryptjs"
 import { prisma } from "@/lib/prisma"
+import { deriveProofKey, wrapProofKey } from "@/lib/agent-crypto"
 
 // Phase 13 WS-D.0 — agent-enrollment helpers.
 //
@@ -74,6 +75,10 @@ export interface ConsumeEnrollResult {
   agentId: string
   agentSecret: string
   fleethubBaseUrl: string
+  /** WSS gateway URL the agent dials at runtime. Configured via
+   *  PCC2K_GATEWAY_PUBLIC_URL env; defaults to the public gateway
+   *  hostname pattern documented in AGENT-RUNBOOK §2. */
+  gatewayUrl: string
   tenantName: string
 }
 export type ConsumeEnrollError =
@@ -125,6 +130,30 @@ export async function consumeEnrollToken(args: {
     },
   })
 
+  // Bridge to opshub.op_agents — what the WSS gateway looks up.
+  // Without this row + proofKeyEnc the agent's session.proof fails
+  // and the gateway falls through to dev-token mode (which is
+  // disabled in prod). The cross-schema Op_Agent table predates
+  // the Phase 13 enroll flow; this bridge is what makes the new
+  // enroll path actually work end-to-end.
+  //
+  // proofKeyEnc = AES-GCM(deriveProofKey(agentSecret), masterKey).
+  // The agent receives the plaintext agentSecret (as its "token"),
+  // derives the same proofKey, and both sides match on the
+  // session-challenge HMAC.
+  const proofKeyEnc = wrapProofKey(deriveProofKey(agentSecret))
+  await prisma.$executeRaw`
+    INSERT INTO opshub.op_agents
+      (id, "clientName", hostname, os, "secretHash", "capabilitiesJson",
+       "isActive", "createdAt", "updatedAt", "proofKeyEnc", salt)
+    VALUES (
+      ${reg.id}, ${row.tenantName}, ${args.hostname ?? ""}, ${args.os ?? ""},
+      ${agentSecretHash}, ${"[]"}::jsonb,
+      true, NOW(), NOW(), ${proofKeyEnc}, ${randomBytes(16).toString("hex")}
+    )
+    ON CONFLICT (id) DO NOTHING
+  `
+
   // Backfill consumedByAgentId on the token row.
   await prisma.fl_EnrollToken.update({
     where: { token: args.token },
@@ -132,12 +161,16 @@ export async function consumeEnrollToken(args: {
   })
 
   const baseUrl = process.env.FLEETHUB_PUBLIC_URL?.trim() || "https://fleethub.pcc2k.com"
+  const gatewayUrl =
+    process.env.PCC2K_GATEWAY_PUBLIC_URL?.trim() ||
+    "wss://gateway.pcc2k.com/agent/v1"
 
   return {
     ok: true,
     agentId: reg.id,
     agentSecret,
     fleethubBaseUrl: baseUrl,
+    gatewayUrl,
     tenantName: row.tenantName,
   }
 }

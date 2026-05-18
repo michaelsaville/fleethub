@@ -66,21 +66,29 @@ ENROLL_RESPONSE=\$(curl -fsSL -X POST \\
   -d "{\\"token\\": \\"\$PCC2K_BOOTSTRAP_TOKEN\\", \\"hostname\\": \\"\$(hostname)\\", \\"os\\": \\"\$OS\\", \\"osVersion\\": \\"\$(uname -r)\\"}" \\
   "\$PCC2K_FLEETHUB_URL/api/agent-ingest/enroll")
 
-AGENT_ID=\$(echo "\$ENROLL_RESPONSE" | sed -n 's/.*"agentId":"\\([^"]*\\)".*/\\1/p')
+AGENT_ID=\$(echo "\$ENROLL_RESPONSE"     | sed -n 's/.*"agentId":"\\([^"]*\\)".*/\\1/p')
 AGENT_SECRET=\$(echo "\$ENROLL_RESPONSE" | sed -n 's/.*"agentSecret":"\\([^"]*\\)".*/\\1/p')
+GATEWAY_URL=\$(echo "\$ENROLL_RESPONSE"  | sed -n 's/.*"gatewayUrl":"\\([^"]*\\)".*/\\1/p')
+TENANT_NAME=\$(echo "\$ENROLL_RESPONSE"  | sed -n 's/.*"tenantName":"\\([^"]*\\)".*/\\1/p')
 
-if [ -z "\$AGENT_ID" ] || [ -z "\$AGENT_SECRET" ]; then
+if [ -z "\$AGENT_ID" ] || [ -z "\$AGENT_SECRET" ] || [ -z "\$GATEWAY_URL" ]; then
   echo "enrollment failed:" >&2
   echo "\$ENROLL_RESPONSE" >&2
   exit 4
 fi
 
-# Write secret with restrictive perms BEFORE writing config.
+# Write env file the systemd unit reads. PCC2K_AGENT_TOKEN is what
+# agent runConsole() expects; we name agentSecret as that. Keep
+# the FLEETHUB_AGENT_SECRET alias for posture HTTP. Permissions
+# 0600 root before contents lands.
 umask 077
 cat > "\$SECRET_PATH" <<EOF
 PCC2K_AGENT_ID=\$AGENT_ID
+PCC2K_AGENT_TOKEN=\$AGENT_SECRET
 PCC2K_FLEETHUB_AGENT_SECRET=\$AGENT_SECRET
 PCC2K_FLEETHUB_URL=\$PCC2K_FLEETHUB_URL
+PCC2K_GATEWAY_URL=\$GATEWAY_URL
+PCC2K_CLIENT_NAME=\$TENANT_NAME
 EOF
 chmod 0600 "\$SECRET_PATH"
 
