@@ -1,16 +1,20 @@
 import "server-only"
+import { formatInTimeZone } from "date-fns-tz"
 import { prisma } from "@/lib/prisma"
 
 // Phase 7 Workstream A step 8 — on-call schedule resolver.
 //
-// Rotation slots cover a (dayOfWeek, start..end) window in UTC.
-// Multiple slots may overlap; the earliest-listed slot in the
-// rotation array wins. Overrides take precedence over the
-// regular rotation and use absolute ISO timestamps rather than
-// recurring weekly windows.
+// Rotation slots cover a (dayOfWeek, start..end) window. Multiple
+// slots may overlap; the earliest-listed slot in the rotation
+// array wins. Overrides take precedence over the regular rotation
+// and use absolute ISO timestamps rather than recurring weekly
+// windows.
 //
-// Timezone: UTC across the board. DST-aware semantics are
-// punted to v1.5 per PHASE-7-DESIGN §12.
+// Phase 12 WS-E.4 — DST-aware. Fl_OncallSchedule.timezone holds an
+// IANA name ("America/New_York" etc). When set, rotation slot
+// start/end are interpreted in that tz with DST correctly applied;
+// when null, falls back to legacy UTC behavior. date-fns-tz handles
+// the spring-forward gap + fall-back overlap correctly.
 
 export interface RotationSlot {
   userId: string
@@ -55,18 +59,22 @@ export async function resolveCurrentOncall(
 ): Promise<ResolvedOncall | null> {
   const sched = await prisma.fl_OncallSchedule.findUnique({
     where: { id: scheduleId },
-    select: { isActive: true, rotationJson: true, overridesJson: true },
+    select: { isActive: true, rotationJson: true, overridesJson: true, timezone: true },
   })
   if (!sched || !sched.isActive) return null
 
   const overrides = parseOverrides(sched.overridesJson)
   const slots = parseRotation(sched.rotationJson)
   const atMs = at.getTime()
+  // Phase 12 WS-E.4 — null tz preserves legacy UTC for already-
+  // configured schedules.
+  const tz = sched.timezone ?? "UTC"
 
   let userId: string | null = null
   let fromOverride = false
 
-  // 1) Overrides first — chronological priority.
+  // 1) Overrides first — chronological priority. ISO timestamps in
+  // override windows are absolute; tz doesn't apply.
   for (const o of overrides) {
     const startMs = Date.parse(o.start)
     const endMs = Date.parse(o.end)
@@ -78,10 +86,16 @@ export async function resolveCurrentOncall(
     }
   }
 
-  // 2) Rotation: first slot whose (dayOfWeek, HH:MM..HH:MM in UTC) covers `at`.
+  // 2) Rotation: first slot whose (dayOfWeek, HH:MM..HH:MM in tz)
+  // covers `at`. formatInTimeZone handles DST transitions — at the
+  // spring-forward gap the wall-clock skips, so a 02:30 slot
+  // simply doesn't fire that Sunday (which is correct).
   if (!userId) {
-    const dow = at.getUTCDay()
-    const hhmm = at.getUTCHours() * 60 + at.getUTCMinutes()
+    // "e" = ISO day of week (1=Mon..7=Sun); subtract for 0=Sun..6=Sat.
+    const isoDow = Number(formatInTimeZone(at, tz, "e")) // 1..7 where 1=Mon
+    const dow = isoDow === 7 ? 0 : isoDow // remap to Sunday=0
+    const wallHHMM = formatInTimeZone(at, tz, "HH:mm")
+    const hhmm = hhmmToMin(wallHHMM) ?? 0
     for (const s of slots) {
       if (s.dayOfWeek !== dow) continue
       const startMin = hhmmToMin(s.start)
