@@ -3,6 +3,7 @@ import AppShell from "@/components/AppShell"
 import SeedBanner from "@/components/SeedBanner"
 import { Card } from "@/components/ui/Card"
 import { EmptyState } from "@/components/ui/EmptyState"
+import { buttonStyle } from "@/components/ui/Button"
 import { mockMode } from "@/lib/devices"
 import {
   getFleetSoftwarePosture,
@@ -356,8 +357,9 @@ function Empty() {
 function btnGhost(): React.CSSProperties {
   return { fontSize: 12, fontWeight: 500, padding: "6px 12px", borderRadius: 6, border: "0.5px solid var(--color-border-tertiary)", background: "transparent", color: "var(--color-text-secondary)", textDecoration: "none" }
 }
+// Phase 10 WS-D §4 — delegates to Button primitive's canonical shape.
 function btnPrimary(): React.CSSProperties {
-  return { fontSize: 12, fontWeight: 500, padding: "6px 14px", borderRadius: 6, background: "var(--color-accent)", color: "#fff", textDecoration: "none" }
+  return buttonStyle({ variant: "primary" })
 }
 function th(): React.CSSProperties {
   return { textAlign: "left", padding: "8px 10px", fontWeight: 600 }

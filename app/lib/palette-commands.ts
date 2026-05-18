@@ -214,7 +214,7 @@ async function resolveDeploy(
         label: `${verb} ${p.name}${versionPart}${targetPart}`,
         hint: `${p.tenantName} · ${p.source} · ${p.os} · pre-fills the deploy form`,
         href: `/deployments/new?${params.toString()}`,
-        icon: action === "uninstall" ? "🗑" : action === "update" ? "🔁" : "📤",
+        icon: action === "uninstall" ? "🗑" : action === "update" ? "🔁" : "🚀",
       }
     }),
   )
@@ -428,7 +428,7 @@ async function buildPatchCommand(
     label: `Deploy patch ${patch.sourceId}${targetSummary ? ` to ${targetSummary}` : ""}`,
     hint: `${isKev ? "🚨 KEV · " : ""}${patch.source} · ${patch.os} · ${patch.title.slice(0, 60)}${patch.title.length > 60 ? "…" : ""}`,
     href: `/deployments/new?${params.toString()}`,
-    icon: patch.isHotpatch ? "⚡" : isKev ? "🚨" : "🛡",
+    icon: patch.isHotpatch ? "⚡" : isKev ? "🚨" : "🔧",
   }
 }
 
@@ -540,7 +540,7 @@ async function resolveTriage(rest: string): Promise<PaletteCommand[]> {
       label: "Open Triage",
       hint: "Cross-tenant MSP rollup at /msp",
       href: "/msp",
-      icon: "⚠",
+      icon: "🚨",
     }]
   }
 
@@ -553,7 +553,7 @@ async function resolveTriage(rest: string): Promise<PaletteCommand[]> {
       label: `Triage — ${signal}`,
       hint: `Open /msp filtered to clients with non-zero ${signal}`,
       href: `/msp?signal=${signal}`,
-      icon: "⚠",
+      icon: "🚨",
     }]
   }
 
@@ -566,7 +566,7 @@ async function resolveTriage(rest: string): Promise<PaletteCommand[]> {
       label: `Triage — ${severity}`,
       hint: `Open /msp with severity filter ${severity}`,
       href: `/msp?severity=${severity}`,
-      icon: "⚠",
+      icon: "🚨",
     }]
   }
 
@@ -594,7 +594,7 @@ async function resolveTriage(rest: string): Promise<PaletteCommand[]> {
       label: `Triage — ${name}`,
       hint: "Open /msp and scroll to this client",
       href: `/msp#client-${slug}`,
-      icon: "⚠",
+      icon: "🚨",
     }
   })
 }

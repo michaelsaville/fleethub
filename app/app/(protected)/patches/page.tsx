@@ -249,16 +249,22 @@ function DeployLink({ patchId, affectedDeviceIds }: { patchId: string; affectedD
   )
 }
 
+// Phase 10 WS-D §1 — pill() now returns Chip-shape CSS (radius-full,
+// fontWeight 600, 1px 8px padding) so the badges on /patches finally
+// match the soft chips used everywhere else. Solid-tint variant kept
+// because these are status-driven and need the full-bleed visual weight.
 function pill(bg: string): React.CSSProperties {
   return {
+    display: "inline-block",
     fontSize: 10,
-    fontWeight: 700,
-    padding: "2px 7px",
-    borderRadius: 3,
+    fontWeight: 600,
+    padding: "1px 8px",
+    borderRadius: "var(--radius-full)",
     background: bg,
     color: "#fff",
     textTransform: "uppercase",
     letterSpacing: "0.05em",
+    whiteSpace: "nowrap",
   }
 }
 function cvssColor(score: number): string {

@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { notFound } from "next/navigation"
 import AppShell from "@/components/AppShell"
+import { buttonStyle } from "@/components/ui/Button"
 import { prisma } from "@/lib/prisma"
 import { getSessionContext } from "@/lib/authz"
 import PatchApprovalActions from "./PatchApprovalActions"
@@ -238,16 +239,20 @@ function parseCveList(json: string | null): string[] {
   }
 }
 
+// Phase 10 WS-D §1 — pill() returns Chip-shape CSS (rounded, fontWeight 600)
+// so badges on /patches/[id] match the soft chips used elsewhere.
 function pill(bg: string): React.CSSProperties {
   return {
+    display: "inline-block",
     fontSize: 10,
-    fontWeight: 700,
-    padding: "2px 7px",
-    borderRadius: 3,
+    fontWeight: 600,
+    padding: "1px 8px",
+    borderRadius: "var(--radius-full)",
     background: bg,
     color: "#fff",
     textTransform: "uppercase",
     letterSpacing: "0.05em",
+    whiteSpace: "nowrap",
   }
 }
 function cvssColor(score: number): string {
@@ -295,15 +300,7 @@ function th(): React.CSSProperties {
 function td(): React.CSSProperties {
   return { padding: "6px 10px", color: "var(--color-text-primary)", verticalAlign: "top" }
 }
+// Phase 10 WS-D §4 — delegates to Button primitive's canonical shape.
 function btnPrimary(): React.CSSProperties {
-  return {
-    fontSize: 12,
-    fontWeight: 500,
-    padding: "8px 16px",
-    borderRadius: 6,
-    background: "var(--color-accent)",
-    color: "#fff",
-    textDecoration: "none",
-    border: "0.5px solid var(--color-border-secondary)",
-  }
+  return buttonStyle({ variant: "primary" })
 }

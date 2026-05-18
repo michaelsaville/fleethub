@@ -20,18 +20,18 @@ interface NavItem {
  */
 const NAV_ITEMS: NavItem[] = [
   { href: "/",         label: "Dashboard",  icon: "🏠" },
-  { href: "/msp",      label: "Triage",     icon: "⚠" },
+  { href: "/msp",      label: "Triage",     icon: "🚨" },
   { href: "/clients",  label: "Clients",    icon: "🏢" },
   { href: "/devices",  label: "Devices",    icon: "💻" },
-  { href: "/groups",   label: "Groups",     icon: "◫" },
+  { href: "/groups",   label: "Groups",     icon: "📁" },
   { href: "/alerts",   label: "Alerts",     icon: "🔔" },
-  { href: "/patches",  label: "Patches",    icon: "🛡" },
+  { href: "/patches",  label: "Patches",    icon: "🔧" },
   { href: "/scripts",  label: "Scripts",    icon: "⚡" },
   { href: "/runbooks", label: "Runbooks",   icon: "🔁" },
   { href: "/monitors", label: "Monitors",   icon: "📈" },
   { href: "/software", label: "Software",   icon: "📦" },
   { href: "/packages", label: "Packages",   icon: "📥" },
-  { href: "/deployments", label: "Deployments", icon: "📤" },
+  { href: "/deployments", label: "Deployments", icon: "🚀" },
   { href: "/rings",    label: "Rings",      icon: "🎯" },
   { href: "/reports",  label: "Reports",    icon: "📊" },
   { href: "/remote-sessions", label: "Remote",  icon: "🖥️" },
@@ -81,9 +81,6 @@ export default function Sidebar() {
           <Link href="/" style={{ textDecoration: "none", color: "var(--color-text-primary)" }}>
             <div style={{ fontWeight: 600, fontSize: "14px", letterSpacing: "-0.01em" }}>
               FleetHub
-            </div>
-            <div style={{ fontSize: "10px", color: "var(--color-text-muted)" }}>
-              Phase 0 · scaffold
             </div>
           </Link>
         )}

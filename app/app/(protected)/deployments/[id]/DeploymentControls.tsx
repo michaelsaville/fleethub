@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { ConfirmModal } from "@/components/ui/ConfirmModal"
+import { buttonStyle } from "@/components/ui/Button"
 
 export default function DeploymentControls({
   deploymentId,
@@ -110,13 +111,9 @@ function btn(): React.CSSProperties {
     cursor: "pointer",
   }
 }
+// Phase 10 WS-D §4 — delegates to Button primitive's canonical shape.
 function btnPrimary(): React.CSSProperties {
-  return {
-    ...btn(),
-    background: "var(--color-accent)",
-    color: "#fff",
-    border: "0.5px solid var(--color-border-secondary)",
-  }
+  return buttonStyle({ variant: "primary" })
 }
 function btnDanger(): React.CSSProperties {
   return {

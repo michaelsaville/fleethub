@@ -12,7 +12,7 @@ import RemoteSessionLauncher from "./RemoteSessionLauncher"
 import RustdeskIdEditor from "./RustdeskIdEditor"
 import { markRemoteSessionClosed } from "../../remote-sessions/actions"
 import { Chip } from "@/components/ui/Chip"
-import type { Tone } from "@/lib/ui-tokens"
+import { TYPOGRAPHY, TONE_PALETTE, type Tone } from "@/lib/ui-tokens"
 
 export const dynamic = "force-dynamic"
 
@@ -213,7 +213,7 @@ function Breadcrumb({ device }: { device: DeviceRow }) {
 function Header({ device, alertCount }: { device: DeviceRow; alertCount: number }) {
   return (
     <header style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
-      <h1 style={{ fontSize: "22px", fontWeight: 600, margin: 0, letterSpacing: "-0.01em", display: "inline-flex", alignItems: "center", gap: "10px" }}>
+      <h1 style={{ ...TYPOGRAPHY.H1, display: "inline-flex", alignItems: "center", gap: "10px" }}>
         <span
           aria-label={device.isOnline ? "online" : "offline"}
           title={device.isOnline ? "online" : "offline"}
@@ -1128,12 +1128,9 @@ function PostureRow({
   primary: string
   secondary?: string | null
 }) {
-  const palette: Record<typeof tone, { bg: string; fg: string }> = {
-    ok:      { bg: "rgba(16, 185, 129, 0.15)", fg: "var(--color-success, #059669)" },
-    warn:    { bg: "rgba(245, 158, 11, 0.15)", fg: "var(--color-warning, #d97706)" },
-    bad:     { bg: "rgba(220, 38, 38, 0.15)",  fg: "var(--color-danger, #b91c1c)" },
-    neutral: { bg: "rgba(148, 163, 184, 0.15)", fg: "var(--color-text-muted)" },
-  }
+  // Phase 10 WS-D §6 — was a local rgba palette; now sources from
+  // TONE_PALETTE for cross-page severity consistency.
+  const pal = TONE_PALETTE[tone]
   return (
     <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
       <span style={{ width: 90, color: "var(--color-text-muted)", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
@@ -1145,8 +1142,8 @@ function PostureRow({
         borderRadius: "999px",
         fontSize: "10.5px",
         fontWeight: 600,
-        background: palette[tone].bg,
-        color: palette[tone].fg,
+        background: pal.bg,
+        color: pal.color,
       }}>
         {tone}
       </span>

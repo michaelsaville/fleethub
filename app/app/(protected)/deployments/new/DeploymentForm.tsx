@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react"
 import { useRouter } from "next/navigation"
+import { buttonStyle } from "@/components/ui/Button"
 
 interface PackageOpt {
   id: string
@@ -335,17 +336,9 @@ function input(): React.CSSProperties {
     width: "100%",
   }
 }
+// Phase 10 WS-D §4 — delegates to Button primitive's canonical shape.
 function btnPrimary(): React.CSSProperties {
-  return {
-    fontSize: 12,
-    fontWeight: 500,
-    padding: "8px 16px",
-    borderRadius: 6,
-    border: "0.5px solid var(--color-border-secondary)",
-    background: "var(--color-accent)",
-    color: "#fff",
-    cursor: "pointer",
-  }
+  return buttonStyle({ variant: "primary" })
 }
 function btnGhost(): React.CSSProperties {
   return {

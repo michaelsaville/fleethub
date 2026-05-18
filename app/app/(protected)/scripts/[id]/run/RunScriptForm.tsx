@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react"
 import { useRouter } from "next/navigation"
+import { buttonStyle } from "@/components/ui/Button"
 
 interface ScriptOpt {
   id: string
@@ -257,11 +258,12 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function input(): React.CSSProperties {
   return { fontSize: 13, padding: "7px 10px", borderRadius: 6, border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background)", color: "var(--color-text-primary)", width: "100%" }
 }
+// Phase 10 WS-D §4 — delegate to Button primitive's canonical shape.
 function btnPrimary(): React.CSSProperties {
-  return { fontSize: 12, fontWeight: 500, padding: "8px 16px", borderRadius: 6, border: "0.5px solid var(--color-border-secondary)", background: "var(--color-accent)", color: "#fff", cursor: "pointer" }
+  return buttonStyle({ variant: "primary" })
 }
 function btnDanger(): React.CSSProperties {
-  return { ...btnPrimary(), background: "var(--color-danger)", border: "0.5px solid var(--color-danger)" }
+  return buttonStyle({ variant: "danger" })
 }
 function btnGhost(): React.CSSProperties {
   return { fontSize: 12, fontWeight: 500, padding: "8px 14px", borderRadius: 6, border: "0.5px solid var(--color-border-tertiary)", background: "transparent", color: "var(--color-text-secondary)", cursor: "pointer" }

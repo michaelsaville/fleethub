@@ -3,6 +3,7 @@ import { notFound } from "next/navigation"
 import AppShell from "@/components/AppShell"
 import ActivityFeed from "@/components/ActivityFeed"
 import SeedBanner from "@/components/SeedBanner"
+import { TYPOGRAPHY } from "@/lib/ui-tokens"
 import { listAlerts } from "@/lib/alerts"
 import { getClient, getClientActivity } from "@/lib/clients"
 import { listDevices } from "@/lib/devices"
@@ -114,7 +115,7 @@ function Breadcrumb({ name }: { name: string }) {
 function Header({ name, client }: { name: string; client: { criticalAlerts: number; openAlerts: number } }) {
   return (
     <header style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
-      <h1 style={{ fontSize: "22px", fontWeight: 600, margin: 0, letterSpacing: "-0.01em" }}>
+      <h1 style={TYPOGRAPHY.H1}>
         {name}
       </h1>
       {client.criticalAlerts > 0 && (
