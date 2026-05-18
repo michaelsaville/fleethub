@@ -31,18 +31,24 @@ Picks up the high-value operator-facing items that don't share the
 crypto theme but DO share a coherent "expand what FleetHub can
 monitor and act on" framing.
 
-**Scope:**
-- Network device monitoring (SNMP v3 + ICMP) — `Fl_NetworkDevice` + probe pipeline
+**Scope (architect-tightened — cuts noted; cuts moved to Phase 13):**
+- Network device monitoring (SNMP v3 + ICMP) — `Fl_NetworkDevice` + fact-table + hourly rollup
 - Recurring tenant maintenance windows — `Fl_MaintenanceWindow` + cron + alert suppression
-- Mutable AV/EDR management — Defender + CrowdStrike scope only
-- Vault-KEK rotation UI — `/admin/crypto/rotate` page
-- pcc2k-agent Go verbs (shell.open/close, file.push/pull, backup.trigger/cancel) — closes Phase 10 deferral
-- xterm.js modal terminal UI on /devices/[id]?tab=remote
-- Asset/warranty input UI + "Warranty expiring 90d" report kind
-- Saved views on /alerts + /devices
+- Vault-KEK rotation UI — `/admin/crypto/rotate` 3-step wizard
+- pcc2k-agent Go verbs (shell/file/backup) — closes Phase 10 deferral
+- xterm.js drawer terminal UI on /devices/[id]?tab=remote
+- Saved views on /alerts + /devices — Fl_StaffUser.savedViewsJson finally wired
 - Alerts bulk-ack Undo toast + Deployments BulkBar — finishes Phase 10 deferral
-- Alert evaluator queue throttling
-- On-call DST-aware semantics
+- Sidebar /approvals link + NotificationBadge wire (Phase 11 follow-up)
+- Alert evaluator queue throttling — `Fl_EvaluatorLease` table, no Redis dep
+- On-call DST-aware semantics (`@date-fns/tz` dep)
+- Phase-11 follow-ups bundled: channel-secret extension to vault (SMTP/PagerDuty/Teams) + `Fl_ActionApproval`/`Fl_StepUpConsumed` expiry sweep cron
+- `lib/cron-fire-eval.ts` extraction (6 cron consumers compose, no fork) + health endpoint widening (cron-stale detector)
+
+**Architect cut (moved to Phase 13):**
+- Mutable AV/EDR — same agent-namespace blocker shape as `fleet.services.*`; bundle both "needs new agent namespace" workstreams in Phase 13 for one capability-negotiation surface
+- Asset/warranty input UI + 90d report — UI-heavy polish, low coupling
+- WebAuthn cred rename/delete UI — Phase 11 polish, not gating
 
 ## Phase 13 — Final polish + project close
 
@@ -53,13 +59,13 @@ close" below.
 **Scope:**
 - Content-recording shell sessions — `Fl_ShellSession.recordingS3Url` + asciicast v2
 - Process/service inspector — assumes AGENT-PROTOCOL `fleet.services.*` namespace lands
+- Mutable AV/EDR management — Defender + CrowdStrike (`fleet.av.*` namespace, bundled with services namespace decision)
 - Time-tracking on `Fl_RemoteSession` + `Fl_ScriptRun` → TicketHub time-card sync
 - Custom monitor expressions — `Fl_Monitor.expressionJson` MVP
-- Risk-weight tuning UI on /msp
-- 7-day sparkline per signal on triage table
-- SSE rail cards + tripped-runbook rail card
+- Asset/warranty input UI + "Warranty expiring 90d" report kind
+- WebAuthn cred rename/delete UI on /account/security
 - Mobile responsive MSP table
-- Per-tenant compliance weight override
+- SSE rail cards + tripped-runbook rail card
 - Portal Tailwind→CSS-var bridge (portal-side phase)
 - PSA-out adapters — basic ConnectWise only
 - `docs/RUNBOOK.md` + `docs/RELEASE-NOTES-v1.0.md` (project-close docs)
@@ -77,6 +83,9 @@ which means a new design pass, not a backlog item.
 - White-label / multi-MSP federation
 - PWA-native mobile (responsive web is the answer)
 - Halo + Autotask PSA adapters (ConnectWise covers the demand)
+- **Risk-weight tuning UI on /msp** — MSP triage shipped functional in Phase 6; per-signal weight tuning is adornment
+- **Per-tenant compliance weight override** — same framing, no operator demand surfaced
+- **7-day sparkline per signal on triage table** — bandwidth-heavy chart for a triage table that already conveys urgency via tone
 
 ## Why cap at 13
 
