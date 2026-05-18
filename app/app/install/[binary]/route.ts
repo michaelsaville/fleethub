@@ -74,7 +74,11 @@ export async function GET(
       status: 503,
     })
   }
-  return new NextResponse(buf, {
+  // NextResponse wants BodyInit. Node Buffer / Uint8Array trip the
+  // Next 16 + Node 22 type checker (narrowed BodyInit no longer
+  // accepts a bare typed array). Blob wrap is the cleanest fix.
+  const body = new Blob([new Uint8Array(buf)], { type: entry.contentType })
+  return new NextResponse(body, {
     headers: {
       "content-type": entry.contentType,
       "content-length": String(buf.length),

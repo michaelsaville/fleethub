@@ -10,6 +10,11 @@ services:
     ports:
       # nginx on 100.91.194.83 reverse-proxies https://fleethub.pcc2k.com → :3011
       - "3011:3000"
+    volumes:
+      # Phase v1.0.2 WS-D — /install/* routes read agent binaries from here.
+      # Operator stages new releases into /var/lib/fleethub/agent-releases/<ver>/
+      # then updates CURRENT. Mounted read-only so the container can't mutate.
+      - /var/lib/fleethub/agent-releases:/var/lib/fleethub/agent-releases:ro
     networks:
       - dochub_default
 
