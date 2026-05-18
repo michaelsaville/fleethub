@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { ALERT_CHANNEL_ADAPTERS } from "@/lib/alert-channels"
 import { safeParseMatchJson } from "@/lib/schemas/match"
+import { safeParseChannelsJson } from "@/lib/schemas/channel"
 import {
   matchesAlert,
   parseEscalationChain,
@@ -161,12 +162,19 @@ export async function dispatchAlert(alert: Fl_Alert): Promise<void> {
       }
     }
 
-    let channels: ChannelConfig[]
-    try {
-      channels = JSON.parse(r.channelsJson) as ChannelConfig[]
-    } catch {
+    // Phase 10 WS-B §4.3 — read-side safeParse. Malformed channelsJson
+    // now writes a route.skip.malformed audit row + skips dispatch
+    // instead of silently `continue`-ing.
+    const parsedChannels = safeParseChannelsJson(r.channelsJson)
+    if (!parsedChannels.ok) {
+      await writeAudit({
+        action: "route.skip.malformed",
+        outcome: "error",
+        detail: { routeId: r.id, reason: parsedChannels.reason, blob: "channelsJson" },
+      }).catch(() => {})
       continue
     }
+    const channels: ChannelConfig[] = parsedChannels.channels
     // Compute escalateAt for the primary dispatch: now + the first
     // chain step's afterMin. Cron picks it up when the ack window
     // expires (state="sent"/"failed" + escalateAt <= now + alert

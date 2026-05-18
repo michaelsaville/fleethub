@@ -89,3 +89,28 @@ export const ChannelList = z
   .array(ChannelConfig)
   .min(1, "at least one channel is required")
   .max(10, "max 10 channels")
+
+/// Phase 10 WS-B §4.3 — read-side safe parse for Fl_AlertRoute.channelsJson.
+/// Same pattern as safeParseMatchJson in match.ts. Returns a
+/// discriminated result so dispatch can surface malformed-channel
+/// audit rows instead of silently `continue`-ing.
+export type SafeParseChannelsResult =
+  | { ok: true; channels: ChannelConfig[] }
+  | { ok: false; reason: string }
+
+export function safeParseChannelsJson(json: string): SafeParseChannelsResult {
+  let raw: unknown
+  try {
+    raw = JSON.parse(json)
+  } catch (err) {
+    return { ok: false, reason: `JSON parse failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+  const parsed = ChannelList.safeParse(raw)
+  if (!parsed.success) {
+    return {
+      ok: false,
+      reason: `channels shape mismatch: ${parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ")}`,
+    }
+  }
+  return { ok: true, channels: parsed.data }
+}

@@ -1,6 +1,11 @@
 import "server-only"
-import { createHash } from "node:crypto"
 import { prisma } from "@/lib/prisma"
+// Phase 10 WS-B §4.1 — single canonical hash function for the audit
+// chain lives in lib/audit-chain.ts. Imported + re-aliased here for
+// the local writer. Any future column add to the canonical input
+// set moves both sides automatically — the "enforced by convention"
+// comment is now enforced by import.
+import { hashAuditRow as hashRow } from "./audit-chain"
 
 /**
  * Append-only, hash-chained audit log writer. Per HIPAA-READY.md, every
@@ -9,6 +14,7 @@ import { prisma } from "@/lib/prisma"
  * here so the chain stays continuous.
  *
  * Phase 1 should add a /api/audit/verify endpoint that walks the chain.
+ * (Shipped in Phase 5 step 13. Comment kept for historical context.)
  */
 
 interface WriteAuditArgs {
@@ -18,29 +24,6 @@ interface WriteAuditArgs {
   action: string
   outcome: "ok" | "error" | "pending"
   detail?: unknown
-}
-
-function hashRow(args: {
-  prevHash: string | null
-  actorEmail: string | null
-  clientName: string | null
-  deviceId: string | null
-  action: string
-  outcome: string
-  detailJson: string | null
-  createdAt: Date
-}): string {
-  const canonical = [
-    args.prevHash ?? "",
-    args.actorEmail ?? "",
-    args.clientName ?? "",
-    args.deviceId ?? "",
-    args.action,
-    args.outcome,
-    args.detailJson ?? "",
-    args.createdAt.toISOString(),
-  ].join("|")
-  return createHash("sha256").update(canonical).digest("hex")
 }
 
 export async function writeAudit(args: WriteAuditArgs) {

@@ -60,13 +60,41 @@ const handler = withCronAuth<NextRequest>(async (req) => {
     if (!groups.has(key)) groups.set(key, d)
   }
 
+  // Phase 10 WS-B §4.4 — batch the per-lead Fl_AlertRoute.findUnique
+  // and Fl_AlertDispatch.count queries that were n+1 in the loop.
+  // At BATCH=200 leads that was ~400 round-trips per tick; now it's
+  // ~3 (one findMany, one groupBy, plus the existing batch up top).
+  const routeIds = Array.from(
+    new Set(
+      Array.from(groups.values())
+        .map((g) => g.routeId)
+        .filter((id): id is string => id != null),
+    ),
+  )
+  const routes = await prisma.fl_AlertRoute.findMany({
+    where: { id: { in: routeIds } },
+    select: { id: true, escalationJson: true, isActive: true },
+  })
+  const routeMap = new Map(routes.map((r) => [r.id, r]))
+
+  const alertIds = Array.from(new Set(Array.from(groups.values()).map((g) => g.alertId)))
+  const stepCounts = await prisma.fl_AlertDispatch.groupBy({
+    by: ["alertId", "escalationStep"],
+    where: { alertId: { in: alertIds } },
+    _count: true,
+  })
+  const stepCountMap = new Map<string, number>()
+  for (const r of stepCounts) {
+    stepCountMap.set(`${r.alertId}:${r.escalationStep}`, r._count)
+  }
+
   let escalated = 0
   let exhausted = 0
   let stopped = 0
   const errors: string[] = []
   for (const lead of groups.values()) {
     try {
-      const result = await escalateOne(lead)
+      const result = await escalateOne(lead, routeMap, stepCountMap)
       if (result === "escalated") escalated++
       else if (result === "exhausted") exhausted++
       else stopped++
@@ -98,20 +126,21 @@ const handler = withCronAuth<NextRequest>(async (req) => {
 
 type EscalateOutcome = "escalated" | "exhausted" | "stopped"
 
-async function escalateOne(lead: {
-  id: string
-  alertId: string
-  escalationStep: number
-  routeId: string | null
-  alert: import("@prisma/client").Fl_Alert
-}): Promise<EscalateOutcome> {
+async function escalateOne(
+  lead: {
+    id: string
+    alertId: string
+    escalationStep: number
+    routeId: string | null
+    alert: import("@prisma/client").Fl_Alert
+  },
+  routeMap: Map<string, { id: string; escalationJson: string | null; isActive: boolean }>,
+  stepCountMap: Map<string, number>,
+): Promise<EscalateOutcome> {
   // No route → chain is unrecoverable (route was deleted; we
   // detached the dispatch). Treat as exhausted.
   if (!lead.routeId) return "exhausted"
-  const route = await prisma.fl_AlertRoute.findUnique({
-    where: { id: lead.routeId },
-    select: { escalationJson: true, isActive: true },
-  })
+  const route = routeMap.get(lead.routeId)
   if (!route || !route.isActive) return "stopped"
 
   const chain = parseEscalationChain(route.escalationJson)
@@ -123,9 +152,7 @@ async function escalateOne(lead: {
   const nextStep = chain[nextIndex]
   // Guard against the worker firing twice in overlapping windows:
   // if step nextIndex+1 already exists for this alert, skip.
-  const existing = await prisma.fl_AlertDispatch.count({
-    where: { alertId: lead.alertId, escalationStep: nextIndex + 1 },
-  })
+  const existing = stepCountMap.get(`${lead.alertId}:${nextIndex + 1}`) ?? 0
   if (existing > 0) return "stopped"
 
   // Compute escalateAt for the NEXT level (chain[nextIndex+1]).

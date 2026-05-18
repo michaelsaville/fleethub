@@ -2,6 +2,8 @@ import "server-only"
 import { randomUUID } from "node:crypto"
 import { prisma } from "@/lib/prisma"
 import { writeAlert } from "@/lib/alert-dispatch"
+import { writeAudit } from "@/lib/audit"
+import { safeParseMonitorPredicateJson } from "@/lib/schemas/predicate"
 
 // Phase 8 Workstream A step 1 — monitor evaluator. Cron at
 // /api/cron/monitor-evaluate calls evaluateMonitors() every minute.
@@ -145,17 +147,20 @@ export async function evaluateMonitors(now: Date = new Date()): Promise<Evaluati
         summary.errors.push({ monitorId: m.id, error: `unknown metric "${m.metric}"` })
         continue
       }
-      let predicate: Predicate
-      try {
-        predicate = JSON.parse(m.predicateJson) as Predicate
-      } catch {
-        summary.errors.push({ monitorId: m.id, error: "predicateJson is invalid JSON" })
+      // Phase 10 WS-B §4.3 — read-side safeParse. Malformed predicateJson
+      // (manual SQL fix / pre-validator legacy row) now writes a
+      // monitor.skip.malformed audit row instead of degrading silently.
+      const parsedPred = safeParseMonitorPredicateJson(m.predicateJson)
+      if (!parsedPred.ok) {
+        summary.errors.push({ monitorId: m.id, error: parsedPred.reason })
+        await writeAudit({
+          action: "monitor.skip.malformed",
+          outcome: "error",
+          detail: { monitorId: m.id, reason: parsedPred.reason },
+        }).catch(() => {})
         continue
       }
-      if (!["lt", "gt", "eq", "neq"].includes(predicate.operator)) {
-        summary.errors.push({ monitorId: m.id, error: `unknown operator "${predicate.operator}"` })
-        continue
-      }
+      const predicate: Predicate = parsedPred.predicate as Predicate
       const windowMin = predicate.forMin && predicate.forMin > 0 ? predicate.forMin : 15
 
       // Device set — same filters every metric kind shares.

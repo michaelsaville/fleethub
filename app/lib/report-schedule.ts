@@ -4,6 +4,7 @@ import path from "node:path"
 import { CronExpressionParser } from "cron-parser"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
+import { safeParseDeliveryJson } from "@/lib/schemas/delivery"
 import { generateReport, REPORTS_DIR } from "@/lib/reports/render"
 import { sendReportEmail, m365Configured } from "@/lib/m365-mail"
 import {
@@ -158,12 +159,20 @@ export async function fireSchedule(
   }
 
   // 5. Deliver via every configured channel.
-  let delivery: DeliveryConfig
-  try {
-    delivery = JSON.parse(schedule.deliveryJson)
-  } catch {
-    return { scheduleId: schedule.id, reportId: report.id, state: "failed", error: "deliveryJson is not valid JSON" }
+  // Phase 10 WS-B §4.3 — read-side safeParse instead of bare
+  // JSON.parse + as-cast. Malformed deliveryJson writes an audit
+  // row so a hand-edited schedule shows up in /audit instead of
+  // failing silently inside the worker.
+  const parsedDelivery = safeParseDeliveryJson(schedule.deliveryJson)
+  if (!parsedDelivery.ok) {
+    await writeAudit({
+      action: "reportSchedule.delivery.malformed",
+      outcome: "error",
+      detail: { scheduleId: schedule.id, reason: parsedDelivery.reason },
+    }).catch(() => {})
+    return { scheduleId: schedule.id, reportId: report.id, state: "failed", error: `deliveryJson invalid: ${parsedDelivery.reason}` }
   }
+  const delivery: DeliveryConfig = parsedDelivery.delivery as DeliveryConfig
 
   const hasEmail = (delivery.email?.to?.length ?? 0) > 0
   const hasSlack = !!delivery.slack?.webhookUrl

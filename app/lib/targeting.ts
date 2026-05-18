@@ -1,5 +1,7 @@
 import "server-only"
 import { prisma } from "@/lib/prisma"
+import { writeAudit } from "@/lib/audit"
+import { safeParsePinnedDeviceIdsJson } from "@/lib/schemas/pinned-device-ids"
 
 // Phase 9 WS-C §5.1 — single resolver that maps an Fl_DeviceGroup
 // to the current device set. v1 ships pinned-list resolution
@@ -26,13 +28,19 @@ export async function resolveGroupTargets(groupId: string): Promise<ResolvedDevi
   if (!group) return []
 
   // Pinned ids — strict array of Fl_Device.id strings.
+  // Phase 10 WS-B §4.3 — safe parse + audit on malformed blob so
+  // a hand-edited row doesn't silently resolve to zero devices.
   let pinnedIds: string[] = []
   if (group.pinnedDeviceIdsJson) {
-    try {
-      const parsed = JSON.parse(group.pinnedDeviceIdsJson)
-      if (Array.isArray(parsed)) pinnedIds = parsed.filter((s): s is string => typeof s === "string")
-    } catch {
-      // ignore — treat as no pins
+    const parsed = safeParsePinnedDeviceIdsJson(group.pinnedDeviceIdsJson)
+    if (parsed.ok) {
+      pinnedIds = parsed.deviceIds
+    } else {
+      await writeAudit({
+        action: "group.skip.malformed",
+        outcome: "error",
+        detail: { groupId, reason: parsed.reason, blob: "pinnedDeviceIdsJson" },
+      }).catch(() => {})
     }
   }
 
