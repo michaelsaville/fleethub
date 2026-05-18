@@ -2,7 +2,8 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { NotificationBadge } from "@/components/ui/NotificationBadge"
 
 interface NavItem {
   href: string
@@ -25,6 +26,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/devices",  label: "Devices",    icon: "💻" },
   { href: "/groups",   label: "Groups",     icon: "📁" },
   { href: "/alerts",   label: "Alerts",     icon: "🔔" },
+  { href: "/approvals", label: "Approvals", icon: "👥" },
   { href: "/patches",  label: "Patches",    icon: "🔧" },
   { href: "/scripts",  label: "Scripts",    icon: "⚡" },
   { href: "/runbooks", label: "Runbooks",   icon: "🔁" },
@@ -41,6 +43,35 @@ const NAV_ITEMS: NavItem[] = [
 export default function Sidebar() {
   const pathname = usePathname()
   const [collapsed, setCollapsed] = useState(false)
+  // Phase 12 WS-D.7 — pending-approvals count, polled every 30s.
+  // Counts churn slowly (operator-driven), so SSE is overkill;
+  // 30s polling is the right cost.
+  const [approvalsCount, setApprovalsCount] = useState<number | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const res = await fetch("/api/approvals?count=1")
+        if (!res.ok) return
+        const data = (await res.json()) as { count?: number }
+        if (!cancelled && typeof data.count === "number") setApprovalsCount(data.count)
+      } catch {
+        // ignore — try again on next tick
+      }
+    }
+    load()
+    const interval = setInterval(load, 30_000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [])
+  // Decorate NAV_ITEMS with the live count.
+  const navWithBadges = NAV_ITEMS.map((item) =>
+    item.href === "/approvals" && approvalsCount != null
+      ? { ...item, badge: approvalsCount }
+      : item,
+  )
 
   const itemBase: React.CSSProperties = {
     display: "flex",
@@ -101,7 +132,7 @@ export default function Sidebar() {
       </div>
 
       <nav style={{ display: "flex", flexDirection: "column", gap: "2px", padding: "8px" }}>
-        {NAV_ITEMS.map(item => {
+        {navWithBadges.map(item => {
           const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)
           return (
             <Link
@@ -120,18 +151,11 @@ export default function Sidebar() {
               {!collapsed && (
                 <>
                   <span style={{ flex: 1 }}>{item.label}</span>
-                  {item.badge != null && (
-                    <span
-                      style={{
-                        fontSize: "10px",
-                        padding: "1px 7px",
-                        borderRadius: "999px",
-                        background: "var(--color-danger-soft)",
-                        color: "var(--color-danger)",
-                      }}
-                    >
-                      {item.badge}
-                    </span>
+                  {item.badge != null && item.badge > 0 && (
+                    <NotificationBadge
+                      count={item.badge}
+                      tone={item.href === "/approvals" ? "warn" : "bad"}
+                    />
                   )}
                 </>
               )}

@@ -12,16 +12,25 @@ export async function GET(req: NextRequest) {
   const session = await requireSession()
   const state = req.nextUrl.searchParams.get("state")
   const tenant = req.nextUrl.searchParams.get("tenantName")
+  const countOnly = req.nextUrl.searchParams.get("count") === "1"
   const where: Record<string, unknown> = {}
   if (state) {
     where.state = state
+  } else if (countOnly) {
+    // Phase 12 WS-D.7 — sidebar badge counts pending+approved-but-
+    // not-yet-consumed.
+    where.state = { in: ["pending", "approved"] }
   } else {
-    // Default to actionable rows.
+    // Default list view: actionable rows.
     where.state = { in: ["pending", "approved"] }
   }
   if (tenant) where.tenantName = tenant
   if (session.role !== "ADMIN") {
     where.requestedBy = session.email
+  }
+  if (countOnly) {
+    const count = await prisma.fl_ActionApproval.count({ where })
+    return NextResponse.json({ count })
   }
   const rows = await prisma.fl_ActionApproval.findMany({
     where,
