@@ -9,6 +9,7 @@ export default function RunMonitor({
   state,
   isLive,
   isAdmin,
+  realDispatchActive,
   stdout,
   stderr,
   exitCode,
@@ -26,6 +27,7 @@ export default function RunMonitor({
   state: string
   isLive: boolean
   isAdmin: boolean
+  realDispatchActive: boolean
   stdout: string | null
   stderr: string | null
   exitCode: number | null
@@ -139,17 +141,28 @@ export default function RunMonitor({
         </div>
       </section>
 
-      {/* Mock simulation panel — visible only while live + admin */}
-      {isLive && isAdmin && (
-        <section style={{ padding: "10px 14px", background: "var(--color-background-secondary)", border: "0.5px dashed var(--color-warning)", borderRadius: 10, fontSize: 12 }}>
-          <div style={{ color: "var(--color-warning)", fontWeight: 600, marginBottom: 6 }}>
-            Mock-mode simulation (real agent dispatch not wired yet — Phase 2 step 4)
-          </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <button onClick={() => call(`/api/script-runs/${runId}/_simulate`, { outcome: "ok" })} disabled={busy !== null} style={simBtn("var(--color-success)")}>simulate ok</button>
-            <button onClick={() => call(`/api/script-runs/${runId}/_simulate`, { outcome: "error" })} disabled={busy !== null} style={simBtn("var(--color-danger)")}>simulate error</button>
-            <button onClick={() => call(`/api/script-runs/${runId}/_simulate`, { outcome: "timeout" })} disabled={busy !== null} style={simBtn("var(--color-warning)")}>simulate timeout</button>
-          </div>
+      {/* Live status banner — informs about the dispatch mode. Hidden
+          when finished. */}
+      {isLive && (
+        <section style={{ padding: "10px 14px", background: "var(--color-background-secondary)", border: `0.5px ${realDispatchActive ? "solid var(--color-border-tertiary)" : "dashed var(--color-warning)"}`, borderRadius: 10, fontSize: 12 }}>
+          {realDispatchActive ? (
+            <div style={{ color: "var(--color-text-secondary)" }}>
+              Dispatched to agent via WSS gateway. Output streams in below as the agent reports back.
+            </div>
+          ) : (
+            <>
+              <div style={{ color: "var(--color-warning)", fontWeight: 600, marginBottom: 6 }}>
+                Real agent dispatch not active (gateway URL not set OR target device has no agentId)
+              </div>
+              {isAdmin && (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button onClick={() => call(`/api/script-runs/${runId}/_simulate`, { outcome: "ok" })} disabled={busy !== null} style={simBtn("var(--color-success)")}>simulate ok</button>
+                  <button onClick={() => call(`/api/script-runs/${runId}/_simulate`, { outcome: "error" })} disabled={busy !== null} style={simBtn("var(--color-danger)")}>simulate error</button>
+                  <button onClick={() => call(`/api/script-runs/${runId}/_simulate`, { outcome: "timeout" })} disabled={busy !== null} style={simBtn("var(--color-warning)")}>simulate timeout</button>
+                </div>
+              )}
+            </>
+          )}
         </section>
       )}
 

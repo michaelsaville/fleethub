@@ -32,10 +32,14 @@ export default async function RunDetailPage({
 
   const [script, device] = await Promise.all([
     prisma.fl_Script.findUnique({ where: { id: run.scriptId }, select: { id: true, name: true, shell: true } }),
-    prisma.fl_Device.findUnique({ where: { id: run.deviceId }, select: { id: true, hostname: true, clientName: true, os: true } }),
+    prisma.fl_Device.findUnique({ where: { id: run.deviceId }, select: { id: true, hostname: true, clientName: true, os: true, agentId: true } }),
   ])
 
   const isLive = run.state === "queued" || run.state === "running"
+  // Real WSS dispatch fires when both the gateway URL is configured
+  // and the device has an enrolled agentId. If either is missing the
+  // run sits in queued and the admin can drive it via _simulate.
+  const realDispatchActive = Boolean(process.env.PCC2K_GATEWAY_URL) && Boolean(device?.agentId)
   const args = run.argsJson ? safeParse<string[]>(run.argsJson) : null
   const env = run.envJson ? safeParse<Record<string, string>>(run.envJson) : null
 
@@ -72,6 +76,7 @@ export default async function RunDetailPage({
           state={run.state}
           isLive={isLive}
           isAdmin={isAdmin}
+          realDispatchActive={realDispatchActive}
           stdout={run.output}
           stderr={run.stderr}
           exitCode={run.exitCode}

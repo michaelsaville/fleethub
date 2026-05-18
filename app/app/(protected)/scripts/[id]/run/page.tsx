@@ -47,8 +47,9 @@ export default async function RunScriptPage({
           </h1>
           <p style={{ color: "var(--color-text-secondary)", fontSize: 13, margin: "4px 0 0", maxWidth: 640 }}>
             Pick a target host and run. Defaults to dry-run; uncheck to apply
-            (extra confirmation when off). Real agent dispatch is mock-driven
-            in v1 — use the simulate panel on the run viewer to walk it.
+            (extra confirmation when off). The agent receives the dispatch
+            over WSS and reports stdout/stderr back as it runs; hosts without
+            an enrolled agent stay queued until simulated by an admin.
           </p>
         </header>
 
