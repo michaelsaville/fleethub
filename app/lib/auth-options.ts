@@ -47,6 +47,8 @@ export const authOptions: NextAuthOptions = {
       }
     },
     async jwt({ token, user }) {
+      // Initial sign-in: `user` is present. Lock identity fields into
+      // the token from the staff row.
       if (user?.email) {
         try {
           const staff = await prisma.fl_StaffUser.findUnique({
@@ -55,26 +57,48 @@ export const authOptions: NextAuthOptions = {
           if (staff) {
             token.id = staff.id
             token.role = staff.role
-            // Phase 10 WS-E — encode the MFA-gate inputs into the
-            // JWT so middleware doesn't need a DB hit per request.
-            ;(token as { totpEnabledAt?: string | null }).totpEnabledAt =
-              staff.totpEnabledAt ? staff.totpEnabledAt.toISOString() : null
           }
         } catch (e) {
-          console.error("FleetHub JWT error:", String(e))
+          console.error("FleetHub JWT signin error:", String(e))
+        }
+      }
+
+      // Phase 11 WS-C.1 — re-read MFA gate inputs on EVERY JWT
+      // refresh, not just initial sign-in. Without this, flipping
+      // Fl_Tenant.mfaRequired=true on a live tenant fails to gate
+      // any user with an active session; admins fix the policy
+      // expecting enforcement and it silently doesn't apply. Two
+      // indexed lookups per refresh — the partial index on
+      // fl_tenants.mfaRequired keeps the cost low, and NextAuth's
+      // refresh cadence (config'd elsewhere) means this fires far
+      // less often than per-request.
+      const userId = token.id as string | undefined
+      if (userId) {
+        try {
+          const staff = await prisma.fl_StaffUser.findUnique({
+            where: { id: userId },
+            select: { totpEnabledAt: true, role: true },
+          })
+          if (staff) {
+            ;(token as { totpEnabledAt?: string | null }).totpEnabledAt =
+              staff.totpEnabledAt ? staff.totpEnabledAt.toISOString() : null
+            // Role may have changed in the DB since sign-in; refresh
+            // it too while we're here. (Cheap: same row read.)
+            token.role = staff.role
+          }
+        } catch (e) {
+          console.error("FleetHub JWT refresh staff lookup error:", String(e))
         }
 
-        // Phase 10 WS-E — tenant.mfaRequired is org-wide for v1:
-        // any tenant flipping the flag forces every user. We don't
-        // bind users to tenants today, so OR across all tenants.
         try {
           const anyTenantRequires = await prisma.fl_Tenant.findFirst({
             where: { mfaRequired: true },
             select: { id: true },
           })
-          ;(token as { tenantMfaRequired?: boolean }).tenantMfaRequired = !!anyTenantRequires
+          ;(token as { tenantMfaRequired?: boolean }).tenantMfaRequired =
+            !!anyTenantRequires
         } catch (e) {
-          console.error("FleetHub JWT mfaRequired lookup error:", String(e))
+          console.error("FleetHub JWT refresh mfaRequired lookup error:", String(e))
         }
       }
       return token
