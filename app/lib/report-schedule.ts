@@ -1,7 +1,7 @@
 import "server-only"
 import { promises as fs } from "node:fs"
 import path from "node:path"
-import { CronExpressionParser } from "cron-parser"
+import { findDue, type CronCandidate } from "@/lib/cron-fire-eval"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { safeParseDeliveryJson } from "@/lib/schemas/delivery"
@@ -76,36 +76,29 @@ export function resolveDateRange(
   }
 }
 
-/** Find schedules whose most recent should-fire time is after lastFiredAt. */
+/** Find schedules whose most recent should-fire time is after
+ *  lastFiredAt. Phase 12 WS-E.2 — delegates to lib/cron-fire-eval
+ *  so all 6 cron consumers share the same off-by-one-safe logic.
+ *  Return shape preserved for back-compat with callers. */
 export async function findDueSchedules(now = new Date()) {
   const schedules = await prisma.fl_ReportSchedule.findMany({
     where: { isActive: true },
   })
-  const due: Array<{
-    schedule: (typeof schedules)[number]
-    fireTime: Date
-  }> = []
-  for (const s of schedules) {
-    let prev: Date
-    try {
-      const it = CronExpressionParser.parse(s.cron, {
-        tz: s.timezone || "UTC",
-        currentDate: now,
-      })
-      prev = it.prev().toDate()
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error(`[report-schedule] invalid cron "${s.cron}" on schedule ${s.id}: ${msg}`)
-      continue
-    }
-    // Has the should-fire time actually passed, AND have we not yet fired
-    // for it?  lastFiredAt null = never fired = fire now.
-    const lastFired = s.lastFiredAt ?? new Date(0)
-    if (prev > lastFired && prev <= now) {
-      due.push({ schedule: s, fireTime: prev })
-    }
-  }
-  return due
+  // Map ReportSchedule rows onto the CronCandidate shape — same
+  // fields, different names. cron + timezone + lastFiredAt + id.
+  const candidates: (CronCandidate & { schedule: (typeof schedules)[number] })[] =
+    schedules.map((s) => ({
+      id: s.id,
+      cron: s.cron,
+      timezone: s.timezone,
+      lastFiredAt: s.lastFiredAt,
+      schedule: s,
+    }))
+  const due = findDue(candidates, now)
+  return due.map((d) => ({
+    schedule: (d.candidate as (typeof candidates)[number]).schedule,
+    fireTime: d.fireTime,
+  }))
 }
 
 interface FireResult {
