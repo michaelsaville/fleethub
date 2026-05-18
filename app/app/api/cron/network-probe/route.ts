@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma"
 import { withCronAuth } from "@/lib/with-cron-auth"
 import { probeIcmp, probeSnmp } from "@/lib/network-probe"
 import { writeAlert } from "@/lib/alert-dispatch"
+import { withLease } from "@/lib/evaluator-lease"
 
 // Phase 12 WS-A.4 — network probe cron.
 //
@@ -35,6 +36,16 @@ interface ProbeWrite {
 }
 
 export const POST = withCronAuth(async (_req: NextRequest) => {
+  const result = await withLease("network-probe", 90_000, async () => {
+    return await runProbeTick()
+  })
+  if (result == null) {
+    return NextResponse.json({ ok: true, skipped: "lease held" }, { status: 409 })
+  }
+  return NextResponse.json(result)
+})
+
+async function runProbeTick() {
   const now = new Date()
   const devices = await prisma.fl_NetworkDevice.findMany({
     where: { isActive: true },
@@ -182,11 +193,11 @@ export const POST = withCronAuth(async (_req: NextRequest) => {
     }
   }
 
-  return NextResponse.json({
+  return {
     ok: true,
     devicesScanned: devices.length,
     probed: probed.length,
     skippedSoon: skippedSoon.length,
     alertsFired,
-  })
-})
+  }
+}
