@@ -7,6 +7,7 @@ import { Field, FieldInput } from "@/components/ui/Field"
 import { prisma } from "@/lib/prisma"
 import { requireAdmin } from "@/lib/authz"
 import { updateStaffProfile } from "../actions"
+import MfaCard from "./MfaCard"
 
 export const dynamic = "force-dynamic"
 
@@ -231,6 +232,11 @@ export default async function StaffEditorPage({
             </ul>
           )}
         </Card>
+        <MfaCard
+          staffId={user.id}
+          email={user.email}
+          totpEnabledAt={user.totpEnabledAt ? user.totpEnabledAt.toISOString() : null}
+        />
       </div>
     </AppShell>
   )
