@@ -20,12 +20,14 @@ interface Props {
 interface TokenResp {
   token: string
   expiresAt: string
+  maxUses: number
   bootstrapSnippetUnix: string
   bootstrapSnippetWindows: string
 }
 
 export default function InstallTab({ tenantName }: Props) {
   const [ttlHours, setTtlHours] = useState(24)
+  const [maxUses, setMaxUses] = useState(1)
   const [pending, setPending] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [issued, setIssued] = useState<TokenResp | null>(null)
@@ -39,7 +41,7 @@ export default function InstallTab({ tenantName }: Props) {
       const res = await fetch("/api/admin/enroll-tokens", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ tenantName, ttlHours }),
+        body: JSON.stringify({ tenantName, ttlHours, maxUses }),
       })
       if (!res.ok) {
         const j = (await res.json().catch(() => ({}))) as { error?: string }
@@ -88,6 +90,21 @@ export default function InstallTab({ tenantName }: Props) {
                   style={{ ...FIELD, width: 100 }}
                 />
               </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                <span style={{ ...TYPOGRAPHY.LABEL_CAPS }}>Max uses</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={maxUses}
+                  onChange={(e) => setMaxUses(Number(e.target.value))}
+                  style={{ ...FIELD, width: 100 }}
+                />
+                <span style={TYPOGRAPHY.HINT}>
+                  1 = single-use. Raise for bulk onboarding (push the same
+                  snippet across N hosts). Capped at 200.
+                </span>
+              </label>
               <div>
                 <Button variant="primary" onClick={generate} disabled={pending}>
                   {pending ? "Generating…" : "Generate install command"}
@@ -102,8 +119,10 @@ export default function InstallTab({ tenantName }: Props) {
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <InlineAlert tone="warn">
                 Token shown ONCE — copy now. Expires{" "}
-                {new Date(issued.expiresAt).toLocaleString()}. After expiry
-                or on first successful use, generate a new token.
+                {new Date(issued.expiresAt).toLocaleString()}.{" "}
+                {issued.maxUses > 1
+                  ? `Good for up to ${issued.maxUses} enrollments, then it's spent. After expiry or once exhausted, generate a new token.`
+                  : "After expiry or on first successful use, generate a new token."}
               </InlineAlert>
 
               <div style={{ display: "flex", gap: 8 }}>

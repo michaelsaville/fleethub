@@ -86,8 +86,11 @@ export type ConsumeEnrollError =
   | { ok: false; reason: "expired"; status: 410 }
   | { ok: false; reason: "already-consumed"; status: 410 }
 
-/** Atomically consume a token + create Fl_AgentRegistration row.
- *  Race-safe via updateMany WHERE consumedAt IS NULL. */
+/** Atomically consume one use of a token + create Fl_AgentRegistration
+ *  row. Race-safe via $queryRaw atomic UPDATE...RETURNING gated on
+ *  useCount < maxUses AND expiresAt > NOW(). When the increment brings
+ *  useCount up to maxUses, consumedAt is stamped in the same statement
+ *  so single-use callers keep their existing semantics. */
 export async function consumeEnrollToken(args: {
   token: string
   hostname: string | null
@@ -102,7 +105,7 @@ export async function consumeEnrollToken(args: {
   if (row.expiresAt.getTime() < Date.now()) {
     return { ok: false, reason: "expired", status: 410 }
   }
-  if (row.consumedAt != null) {
+  if (row.useCount >= row.maxUses) {
     return { ok: false, reason: "already-consumed", status: 410 }
   }
 
@@ -110,12 +113,23 @@ export async function consumeEnrollToken(args: {
   const agentSecret = generateAgentSecret()
   const agentSecretHash = await hashAgentSecret(agentSecret)
 
-  // Race-safe: only consume if still unconsumed.
-  const updated = await prisma.fl_EnrollToken.updateMany({
-    where: { token: args.token, consumedAt: null },
-    data: { consumedAt: new Date(), consumedFromIp: args.ip ?? null },
-  })
-  if (updated.count === 0) {
+  // Atomic consume: increment useCount only if still under cap AND not
+  // expired; stamp consumedAt the moment we hit maxUses; record the
+  // most-recent enroll IP (multi-use tokens just keep the latest).
+  const claimed = await prisma.$queryRaw<Array<{ token: string }>>`
+    UPDATE fleethub.fl_enroll_tokens
+       SET "useCount" = "useCount" + 1,
+           "consumedAt" = CASE
+             WHEN "useCount" + 1 >= "maxUses" THEN NOW()
+             ELSE "consumedAt"
+           END,
+           "consumedFromIp" = ${args.ip ?? null}
+     WHERE token = ${args.token}
+       AND "useCount" < "maxUses"
+       AND "expiresAt" > NOW()
+     RETURNING token
+  `
+  if (claimed.length === 0) {
     return { ok: false, reason: "already-consumed", status: 410 }
   }
 
@@ -154,9 +168,12 @@ export async function consumeEnrollToken(args: {
     ON CONFLICT (id) DO NOTHING
   `
 
-  // Backfill consumedByAgentId on the token row.
-  await prisma.fl_EnrollToken.update({
-    where: { token: args.token },
+  // Backfill consumedByAgentId on the token row. For multi-use tokens
+  // we keep the FIRST agent id that consumed it — the audit log
+  // captures every subsequent enrollment under enroll-token.consumed
+  // with the agentId in detail.
+  await prisma.fl_EnrollToken.updateMany({
+    where: { token: args.token, consumedByAgentId: null },
     data: { consumedByAgentId: reg.id },
   })
 

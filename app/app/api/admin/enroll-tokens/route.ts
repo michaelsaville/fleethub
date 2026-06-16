@@ -22,6 +22,7 @@ export const POST = withAudit(
     const body = (await req.json().catch(() => ({}))) as {
       tenantName?: string
       ttlHours?: number
+      maxUses?: number
     }
     if (!body.tenantName?.trim()) {
       return NextResponse.json(
@@ -45,6 +46,10 @@ export const POST = withAudit(
       Math.max(body.ttlHours ?? ENROLL_TOKEN_TTL_HOURS_DEFAULT, 1),
       ENROLL_TOKEN_TTL_HOURS_MAX,
     )
+    // maxUses=1 stays the default. Multi-use tokens are for bulk-
+    // onboard runs (push a Syncro Script across N hosts). Capped at
+    // 200 so a stray issuer can't accidentally mint a fleet-wide key.
+    const maxUses = Math.min(Math.max(body.maxUses ?? 1, 1), 200)
     const token = generateEnrollToken()
     const expiresAt = new Date(Date.now() + ttl * 3600_000)
 
@@ -59,18 +64,21 @@ export const POST = withAudit(
         tenantName: body.tenantName.trim(),
         createdBy: "(captured via withAudit)",
         expiresAt,
+        maxUses,
       },
     })
 
     addAuditDetail(req, {
       tenant: body.tenantName.trim(),
       ttlHours: ttl,
+      maxUses,
       token: "[REDACTED]", // belt-and-suspenders with redactKeys above
     })
 
     return NextResponse.json({
       token,
       expiresAt: expiresAt.toISOString(),
+      maxUses,
       bootstrapSnippetUnix: unix,
       bootstrapSnippetWindows: windows,
     })

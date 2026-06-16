@@ -1637,6 +1637,14 @@ model Fl_EnrollToken {
   createdBy          String
   createdAt          DateTime  @default(now())
   expiresAt          DateTime
+  /// Single-use by default. Multi-use tokens are issued for bulk onboard
+  /// runs (e.g. push a Syncro Script across N hosts). Token is fully
+  /// consumed when useCount == maxUses; consumedAt is set at that point.
+  maxUses            Int       @default(1)
+  /// Incremented atomically on each successful enroll. Lives alongside
+  /// consumedAt for back-compat — older read paths still see consumedAt
+  /// as the "is fully spent" signal.
+  useCount           Int       @default(0)
   consumedAt         DateTime?
   consumedByAgentId  String?
   consumedFromIp     String?
