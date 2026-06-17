@@ -1,5 +1,15 @@
 import "server-only"
 import { NextResponse } from "next/server"
+import { createHash, timingSafeEqual } from "node:crypto"
+
+/** Length-safe constant-time string compare. Hashing both sides to a
+ *  fixed width avoids the length-leak + length-mismatch throw of a
+ *  bare timingSafeEqual on raw inputs. */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const ha = createHash("sha256").update(a).digest()
+  const hb = createHash("sha256").update(b).digest()
+  return timingSafeEqual(ha, hb)
+}
 
 // Phase 8 Workstream C §5.4 — Bearer-auth wrapper for cron + agent
 // ingest routes. Replaces the same 5-line check inlined in 13
@@ -37,7 +47,10 @@ export function withCronAuth<Req extends Request = Request>(
       )
     }
     const auth = req.headers.get("authorization") ?? ""
-    if (auth !== `Bearer ${cronSecret}`) {
+    // SEC-14 — constant-time compare so the bearer can't be recovered
+    // byte-by-byte via response-timing. The HMAC ingest path is already
+    // constant-time; this closes the one remaining plain `!==`.
+    if (!timingSafeEqualStr(auth, `Bearer ${cronSecret}`)) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 })
     }
     return handler(req, ctx)

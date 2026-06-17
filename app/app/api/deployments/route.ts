@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { requireSession } from "@/lib/authz"
+import { requireRoleResponse } from "@/lib/authz"
 import { createDeployment } from "@/lib/deployments"
 import { withAudit, addAuditDetail } from "@/lib/with-audit"
 import { resolveGroupTargets } from "@/lib/targeting"
@@ -19,7 +19,10 @@ import {
 // }
 // One of targetDeviceIds / targetGroupId is required.
 export const POST = withAudit({ action: "deployment.create" }, async (req: NextRequest) => {
-  const session = await requireSession()
+  // SEC-2 — creating a deployment executes packages on endpoints; TECH+ only.
+  const gateAuth = await requireRoleResponse("TECH")
+  if ("response" in gateAuth) return gateAuth.response
+  const session = gateAuth.ctx
   const body = (await req.json().catch(() => ({}))) as {
     tenantName?: string
     packageId?: string

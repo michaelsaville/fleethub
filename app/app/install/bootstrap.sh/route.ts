@@ -55,6 +55,33 @@ esac
 echo "==> downloading pcc2k-agent (\$PLATFORM)"
 curl -fsSL "\$PCC2K_FLEETHUB_URL/install/pcc2k-agent-\$PLATFORM" -o "\$BIN_PATH.new"
 chmod 0755 "\$BIN_PATH.new"
+
+# SEC-7 — verify the binary's sha256 against the published manifest
+# BEFORE moving it into place. A curl|bash to root with no integrity
+# check means a compromised/MITM'd /install is root RCE on every
+# enrolling endpoint. Fail closed: any mismatch or missing hash aborts.
+# (Authenticode / Ed25519 signature verification is a follow-up, gated
+# on the EV signing cert — sha256 closes the MITM hole today.)
+echo "==> verifying checksum"
+MANIFEST=\$(curl -fsSL "\$PCC2K_FLEETHUB_URL/install/agent-manifest.json")
+if ! printf '%s' "\$MANIFEST" | grep -q "\\"\$PLATFORM\\":{\\"sha256\\""; then
+  echo "no published sha256 for \$PLATFORM in manifest — refusing to install" >&2
+  rm -f "\$BIN_PATH.new"; exit 5
+fi
+EXPECTED_SHA=\$(printf '%s' "\$MANIFEST" | sed "s/.*\\"\$PLATFORM\\":{\\"sha256\\":\\"//" | cut -c1-64)
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL_SHA=\$(sha256sum "\$BIN_PATH.new" | awk '{print \$1}')
+else
+  ACTUAL_SHA=\$(shasum -a 256 "\$BIN_PATH.new" | awk '{print \$1}')
+fi
+if [ "\$EXPECTED_SHA" != "\$ACTUAL_SHA" ]; then
+  echo "checksum mismatch for \$PLATFORM!" >&2
+  echo "  expected: \$EXPECTED_SHA" >&2
+  echo "  actual:   \$ACTUAL_SHA" >&2
+  echo "refusing to install a binary that does not match the manifest." >&2
+  rm -f "\$BIN_PATH.new"; exit 5
+fi
+echo "    sha256 verified (\$ACTUAL_SHA)"
 mv "\$BIN_PATH.new" "\$BIN_PATH"
 
 echo "==> enrolling with FleetHub"

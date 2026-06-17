@@ -1,5 +1,6 @@
 import "server-only"
 import { signTimestampedBody } from "./hmac"
+import { prisma } from "@/lib/prisma"
 
 // Server→agent push via the WSS gateway's POST /agent/dispatch endpoint.
 // Same HMAC scheme as inbound /api/agent-ingest (`${ts}.${rawBody}` signed
@@ -30,6 +31,16 @@ export async function dispatchToAgent(opts: DispatchOptions): Promise<DispatchRe
   const secret = process.env.FLEETHUB_AGENT_SECRET
   if (!baseUrl) return { ok: false, status: 500, error: "PCC2K_GATEWAY_URL not set" }
   if (!secret) return { ok: false, status: 500, error: "FLEETHUB_AGENT_SECRET not set" }
+
+  // SEC-4 — the revocation kill-switch must actually cut command flow.
+  // Refuse to dispatch to a revoked (or never-enrolled) agent even if a
+  // caller still holds its agentId.
+  const reg = await prisma.fl_AgentRegistration.findUnique({
+    where: { id: opts.agentId },
+    select: { isRevoked: true },
+  })
+  if (!reg) return { ok: false, status: 404, error: "agent-not-enrolled" }
+  if (reg.isRevoked) return { ok: false, status: 403, error: "agent-revoked" }
 
   const body = JSON.stringify({
     agentId: opts.agentId,

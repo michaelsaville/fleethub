@@ -16,7 +16,16 @@ export const authOptions: NextAuthOptions = {
       tenantId: process.env.AZURE_AD_TENANT_ID!,
     }),
   ],
-  session: { strategy: "jwt" },
+  // SEC-11 — HIPAA-READY §3 locks a short idle timeout. Effective TTL
+  // was the NextAuth 30-day default; an unattended workstation stayed
+  // authed for weeks. maxAge caps the session; updateAge slides it on
+  // activity so active operators aren't bounced mid-session. Tunable
+  // via SESSION_MAX_AGE (seconds) without a code change; default 15min.
+  session: {
+    strategy: "jwt",
+    maxAge: Number(process.env.SESSION_MAX_AGE ?? 900),
+    updateAge: 300,
+  },
   callbacks: {
     async signIn({ user }) {
       const email = user.email?.toLowerCase()

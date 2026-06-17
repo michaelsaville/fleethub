@@ -353,6 +353,44 @@ export class MethodNotSupportedError extends Error {
   }
 }
 
+/** SEC-1 / SEC-4 — envelope failed agent-identity binding. The route
+ *  audits this as agent.ingest.rejected and returns 4xx. */
+export class AgentRejectedError extends Error {
+  constructor(public reason: string) {
+    super(reason)
+    this.name = "AgentRejectedError"
+  }
+}
+
+/**
+ * SEC-1 + SEC-4 — bind the envelope to a real agent before any write.
+ *
+ * The gateway HMAC authenticates the *gateway*, not the agent: any
+ * valid gateway-signed body could otherwise create/overwrite devices
+ * for ANY tenant (SEC-1 cross-tenant injection), and a revoked agent
+ * (SEC-4) would keep reporting + taking commands. This resolves
+ * `agentId` to a non-revoked Fl_AgentRegistration and, for frames that
+ * carry device facts, asserts the agent's tenant owns that device.
+ *
+ * NOTE: the synthetic-agent.mjs dev harness posts agentId
+ * `dev-agent-<host>` which has no registration — it is now rejected
+ * here by design. Seed a registration (or use a real enroll) for dev.
+ */
+async function assertEnrolledAgent(
+  agentId: string,
+  deviceClientName?: string,
+): Promise<void> {
+  const reg = await prisma.fl_AgentRegistration.findUnique({
+    where: { id: agentId },
+    select: { tenantName: true, isRevoked: true },
+  })
+  if (!reg) throw new AgentRejectedError("agent-not-enrolled")
+  if (reg.isRevoked) throw new AgentRejectedError("agent-revoked")
+  if (deviceClientName !== undefined && reg.tenantName !== deviceClientName) {
+    throw new AgentRejectedError("agent-tenant-mismatch")
+  }
+}
+
 export async function handleAgentEnvelope(raw: unknown): Promise<IngestResult> {
   const parsed = envelope.safeParse(raw)
   if (!parsed.success) {
@@ -385,6 +423,11 @@ export async function handleAgentEnvelope(raw: unknown): Promise<IngestResult> {
     }
     throw new Error(`envelope-validation: ${parsed.error.issues[0]?.message ?? "invalid"}`)
   }
+  // SEC-1 + SEC-4 — gate every envelope on agent identity before any
+  // handler runs a write. Device-bearing frames also assert tenant.
+  const deviceClientName =
+    "device" in parsed.data ? parsed.data.device.clientName : undefined
+  await assertEnrolledAgent(parsed.data.agentId, deviceClientName)
   switch (parsed.data.method) {
     case "inventory.report":
       return handleInventoryReport(parsed.data)

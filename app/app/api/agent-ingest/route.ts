@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { verifyHmac } from "@/lib/bff-hmac"
-import { handleAgentEnvelope, MethodNotSupportedError } from "@/lib/agent-ingest"
+import { handleAgentEnvelope, MethodNotSupportedError, AgentRejectedError } from "@/lib/agent-ingest"
 import { writeAudit } from "@/lib/audit"
 
 export const dynamic = "force-dynamic"
@@ -79,6 +79,17 @@ export async function POST(req: Request) {
         detail: { reason: e.message, kind: "method-not-supported" },
       })
       return NextResponse.json({ error: e.message, code: -32601 }, { status: 400 })
+    }
+    if (e instanceof AgentRejectedError) {
+      // SEC-1 / SEC-4 — identity binding failed (unenrolled / revoked /
+      // cross-tenant). Distinct audit kind so these stand out from
+      // schema rejects in /audit and any forensic review.
+      await safeAudit({
+        action: "agent.ingest.rejected",
+        outcome: "error",
+        detail: { reason: e.reason, kind: "agent-identity" },
+      })
+      return NextResponse.json({ error: e.reason }, { status: 403 })
     }
     const msg = e instanceof Error ? e.message : "internal"
     await safeAudit({
