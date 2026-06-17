@@ -42,7 +42,7 @@ export default async function Home() {
             Fleet overview
           </h1>
           <p style={{ color: "var(--color-text-secondary)", fontSize: "13px", margin: 0 }}>
-            Phase 0 — live counts; the fleet itself populates once the agent ships.
+            Live fleet health across all managed clients.
           </p>
         </header>
 
@@ -72,7 +72,7 @@ export default async function Home() {
             value={stats.hostsBehindPatch}
             href="/patches?compliance=behind"
             tone="neutral"
-            hint="patch coverage · Phase 4"
+            hint="behind on patches"
           />
           <StatCard
             label="Scripts queued"
@@ -93,7 +93,7 @@ export default async function Home() {
             value={stats.softwareUpdatesPending}
             href="/software?state=outdated"
             tone="neutral"
-            hint="Phase 3"
+            hint={stats.softwareUpdatesPending === 0 ? "all current" : "outdated apps"}
           />
         </section>
 
@@ -124,15 +124,14 @@ export default async function Home() {
                 marginBottom: "10px",
               }}
             >
-              Build status
+              Quick actions
             </div>
-            <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: "12px", lineHeight: 1.7 }}>
-              <li>✅ Phase 0 scaffold — sidebar, Cmd-K, dashboard</li>
-              <li>⏳ Phase 1 — fleet inventory (waits on agent)</li>
-              <li>⏳ Phase 2 — script orchestration</li>
-              <li>⏳ Phase 3 — software deployment</li>
-              <li>⏳ Phase 4 — patch management (the chunky one)</li>
-              <li>⏳ Phase 5 — perf + compliance reports</li>
+            <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: "13px", lineHeight: 1.9 }}>
+              <li><a href="/devices" style={{ color: "var(--color-text-link, #2563eb)", textDecoration: "none" }}>→ Browse devices</a></li>
+              <li><a href="/scripts" style={{ color: "var(--color-text-link, #2563eb)", textDecoration: "none" }}>→ Run a script</a></li>
+              <li><a href="/patches?compliance=behind" style={{ color: "var(--color-text-link, #2563eb)", textDecoration: "none" }}>→ Review pending patches</a></li>
+              <li><a href="/deployments" style={{ color: "var(--color-text-link, #2563eb)", textDecoration: "none" }}>→ Deployments</a></li>
+              <li><a href="/alerts?state=open" style={{ color: "var(--color-text-link, #2563eb)", textDecoration: "none" }}>→ Open alerts</a></li>
             </ul>
             <div style={{ marginTop: "12px", fontSize: "11px", color: "var(--color-text-muted)" }}>
               Press <kbd style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "10px", padding: "1px 5px", background: "var(--color-background-tertiary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "3px" }}>⌘K</kbd> to open the command palette.

@@ -3,6 +3,7 @@ import AppShell from "@/components/AppShell"
 import AlertsTable from "@/components/AlertsTable"
 import SeedBanner from "@/components/SeedBanner"
 import { Card } from "@/components/ui/Card"
+import { SavedViewBar } from "@/components/ui/SavedViewBar"
 import { listAlerts } from "@/lib/alerts"
 import type { AlertSeverity, AlertState } from "@/lib/alerts"
 import { getSessionContext } from "@/lib/authz"
@@ -64,6 +65,9 @@ export default async function AlertsPage({
         {isMock && <SeedBanner kind="fleet" />}
 
         <CountStrip totals={totals} filters={filters} />
+
+        {/* UX-5 — wire the previously-orphaned saved-views bar. */}
+        <SavedViewBar page="alerts" />
 
         <FilterStrip filters={filters} facets={facets} />
 

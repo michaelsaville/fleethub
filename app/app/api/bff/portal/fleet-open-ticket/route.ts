@@ -111,7 +111,14 @@ export async function POST(req: NextRequest) {
   // with PORTAL_BFF_SECRET — both apps share that secret (it's the
   // portal-side shared key; the FH→TH leg is just another "trusted
   // app speaking portal protocol").
-  const thBaseUrl = (process.env.TICKETHUB_BFF_URL || DEFAULT_TH_BFF).replace(/\/+$/, "")
+  // INT-10 — canonical server var is TICKETHUB_BASE_URL. Keep reading
+  // the legacy TICKETHUB_BFF_URL as a fallback so a half-migrated .env
+  // doesn't break, then the default.
+  const thBaseUrl = (
+    process.env.TICKETHUB_BASE_URL ||
+    process.env.TICKETHUB_BFF_URL ||
+    DEFAULT_TH_BFF
+  ).replace(/\/+$/, "")
   const thPath = "/api/bff/portal/tickethub/tickets/create"
   const thBody = JSON.stringify({
     clientName,

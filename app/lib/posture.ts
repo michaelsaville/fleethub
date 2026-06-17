@@ -7,8 +7,13 @@ import "server-only"
 export const BACKUP_PRODUCTS = new Set([
   "veeam", "datto", "restic", "windows-backup", "macos-tm", "none",
 ])
+// AGT-AV-1 — the agent already DETECTS these cross-platform engines
+// (ClamAV on Linux, XProtect on macOS, plus the EDR products) but the
+// server discarded any engine not in this Set, leaving the AV column
+// empty on Mac/Linux. Widen the allow-list so detected engines surface.
 export const AV_ENGINES = new Set([
-  "defender", "crowdstrike", "sophos", "sentinelone", "bitdefender", "none",
+  "defender", "crowdstrike", "sophos", "sentinelone", "bitdefender",
+  "clamav", "xprotect", "eset", "malwarebytes", "webroot", "none",
 ])
 
 export interface DeviceLookup {
