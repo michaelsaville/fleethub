@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/Card"
 import { EmptyState } from "@/components/ui/EmptyState"
 import { prisma } from "@/lib/prisma"
 import { getSessionContext } from "@/lib/authz"
+import ScriptPickerForHosts from "@/components/ScriptPickerForHosts"
 
 export const dynamic = "force-dynamic"
 
@@ -12,10 +13,15 @@ type Tab = "all" | "curated" | "drafts"
 export default async function ScriptsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string }>
+  searchParams: Promise<{ tab?: string; hosts?: string }>
 }) {
   const sp = await searchParams
   const tab: Tab = sp.tab === "curated" || sp.tab === "drafts" ? sp.tab : "all"
+  // SA-3 — host selection deep-linked from the /devices BulkBar.
+  const hostIds = (sp.hosts ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
 
   const ctx = await getSessionContext()
   const isAdmin = ctx?.role === "ADMIN"
@@ -68,7 +74,18 @@ export default async function ScriptsPage({
           <TabLink label={`Drafts · ${draftCount}`} href="/scripts?tab=drafts" active={tab === "drafts"} />
         </nav>
 
-        {rows.length === 0 ? (
+        {hostIds.length > 0 ? (
+          <ScriptPickerForHosts
+            scripts={rows.map((r) => ({
+              id: r.id,
+              name: r.name,
+              shell: r.shell,
+              category: r.category,
+              isCurated: r.isCurated,
+            }))}
+            deviceIds={hostIds}
+          />
+        ) : rows.length === 0 ? (
           <EmptyState
             body={
               tab === "all"

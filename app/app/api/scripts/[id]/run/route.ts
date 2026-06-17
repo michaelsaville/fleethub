@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server"
-import { requireSession } from "@/lib/authz"
+import { prisma } from "@/lib/prisma"
+import { requireRoleResponse } from "@/lib/authz"
 import { runScript } from "@/lib/script-commands"
-import { withAudit } from "@/lib/with-audit"
+import { withAudit, addAuditDetail } from "@/lib/with-audit"
 import { resolveGroupTargets } from "@/lib/targeting"
+import {
+  shouldRequireApproval,
+  requireApproval,
+  consumeApproval,
+  hashPayload,
+} from "@/lib/approval-gate"
 
 // POST /api/scripts/[id]/run
 // Body: {
@@ -16,27 +23,87 @@ import { resolveGroupTargets } from "@/lib/targeting"
 export const POST = withAudit(
   { action: "script.run" },
   async (req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
-    const session = await requireSession()
+    // SEC-2 — code execution is TECH+ only. A VIEWER must not be able to
+    // POST a fleet-wide script run just because the UI hides the button.
+    const gateAuth = await requireRoleResponse("TECH")
+    if ("response" in gateAuth) return gateAuth.response
+    const session = gateAuth.ctx
     const { id } = await params
     const body = (await req.json().catch(() => ({}))) as {
       deviceId?: string
       groupId?: string
+      deviceIds?: string[] // SA-3 — ad-hoc host set from /devices BulkBar
       dryRun?: boolean
       args?: string[]
       env?: Record<string, string>
+      approvalId?: string
     }
 
-    if (body.groupId) {
-      // Fan-out path. Each per-device runScript writes its own audit row;
-      // this route's withAudit wraps the operator's intent ("ran script X
-      // on group Y").
-      const resolved = await resolveGroupTargets(body.groupId)
+    // Fan-out path: either a saved group OR an ad-hoc deviceIds[] set
+    // (SA-3 — the /devices BulkBar "Run script" deep-link passes hosts=).
+    const hasAdHoc = Array.isArray(body.deviceIds) && body.deviceIds.length > 0
+    if (body.groupId || hasAdHoc) {
+      // Each per-device runScript writes its own audit row; this route's
+      // withAudit wraps the operator's intent ("ran script X on N hosts").
+      let resolved: Array<{ id: string; clientName: string }>
+      let scopeLabel: string
+      if (body.groupId) {
+        resolved = await resolveGroupTargets(body.groupId)
+        scopeLabel = `group ${body.groupId}`
+      } else {
+        // Only active devices the ids actually resolve to (drops stale ids).
+        resolved = await prisma.fl_Device.findMany({
+          where: { id: { in: body.deviceIds! }, isActive: true },
+          select: { id: true, clientName: true },
+        })
+        scopeLabel = `${resolved.length} selected hosts`
+      }
       if (resolved.length === 0) {
         return NextResponse.json(
-          { error: `group ${body.groupId} resolves to 0 active devices` },
+          { error: `${scopeLabel} resolves to 0 active devices` },
           { status: 400 },
         )
       }
+
+      // SEC-3 — fan-out is the highest-blast-radius operator action. Gate
+      // on the tenant's bulkApprovalThreshold via 4-eyes before the loop.
+      const tenantName = resolved[0].clientName
+      const gatedPayload = {
+        scriptId: id,
+        targets: resolved.map((d) => d.id).sort(),
+        dryRun: body.dryRun ?? false,
+        args: body.args ?? [],
+      }
+      const { hex: payloadHash } = hashPayload(gatedPayload)
+      const gate = await shouldRequireApproval("bulk.dispatch", tenantName, {
+        deviceCount: resolved.length,
+      })
+      if (gate.required) {
+        if (!body.approvalId) {
+          const approval = await requireApproval({
+            action: "bulk.dispatch",
+            tenantName,
+            payload: gatedPayload,
+            scope: `script ${id} → ${scopeLabel} (${resolved.length} devices)`,
+            requestedBy: session.email,
+          })
+          addAuditDetail(req, { approvalRequested: approval.approvalId, reason: gate.reason })
+          return NextResponse.json(
+            { status: "approval-required", approvalId: approval.approvalId, reason: gate.reason, deviceCount: resolved.length },
+            { status: 202 },
+          )
+        }
+        const consumed = await consumeApproval({
+          approvalId: body.approvalId,
+          action: "bulk.dispatch",
+          payloadHash,
+        })
+        if (!consumed.ok) {
+          return NextResponse.json({ error: consumed.reason }, { status: consumed.status })
+        }
+        addAuditDetail(req, { approvalConsumed: body.approvalId })
+      }
+
       const results: Array<{ deviceId: string; ok: boolean; runId?: string; error?: string }> = []
       for (const d of resolved) {
         try {
@@ -57,7 +124,7 @@ export const POST = withAudit(
           })
         }
       }
-      return NextResponse.json({ groupId: body.groupId, count: results.length, results }, { status: 201 })
+      return NextResponse.json({ count: results.length, results }, { status: 201 })
     }
 
     if (!body.deviceId) {
