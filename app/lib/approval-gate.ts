@@ -16,6 +16,7 @@ import { writeAudit } from "@/lib/audit"
 export type ApprovalAction =
   | "bulk.dispatch"
   | "shell.open"
+  | "device.power" // WS-C — reboot/shutdown/logoff
   | "credential.disclose"
   | "credential.update"
   | "alert-route.delete"
@@ -261,7 +262,7 @@ export async function consumeApproval(
 export async function shouldRequireApproval(
   action: ApprovalAction,
   tenantName: string,
-  context: { deviceCount?: number; deviceTags?: string[]; alertRouteId?: string } = {},
+  context: { deviceCount?: number; deviceTags?: string[]; alertRouteId?: string; powerAction?: string } = {},
 ): Promise<{ required: boolean; reason?: string }> {
   const tenant = await prisma.fl_Tenant.findUnique({
     where: { name: tenantName },
@@ -297,5 +298,13 @@ export async function shouldRequireApproval(
     case "oncall-schedule.delete":
       // Always gated — destructive on shared infra.
       return { required: true, reason: "destructive edit on shared infrastructure" }
+    case "device.power":
+      // WS-C — shutdown/logoff strand a remote box (no remote power-on),
+      // so they need peer review. A reboot is routine (the host comes
+      // back) — TECH + confirm is enough.
+      if (context.powerAction === "shutdown" || context.powerAction === "logoff") {
+        return { required: true, reason: `${context.powerAction} requires peer review (remote host won't power back on)` }
+      }
+      return { required: false }
   }
 }

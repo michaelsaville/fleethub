@@ -4,6 +4,7 @@ import AppShell from "@/components/AppShell"
 import ActivityFeed from "@/components/ActivityFeed"
 import SeedBanner from "@/components/SeedBanner"
 import MaintenanceModeButton from "@/components/MaintenanceModeButton"
+import PowerButton from "@/components/PowerButton"
 import { prisma } from "@/lib/prisma"
 import { getDevice, getDeviceActivity, getDeviceAlerts, getDeviceScriptRuns, listDevices, relativeLastSeen } from "@/lib/devices"
 import type { DeviceAlert, DeviceRow, DeviceScriptRun } from "@/lib/devices"
@@ -198,6 +199,7 @@ export default async function DeviceDetailPage({
             requiresJustification: requiresJust,
             canOpen: !!ctx,
           }}
+          power={{ online: device.isOnline, hasAgent: !!device.agentId }}
         />
         <TabNav active={tab} deviceId={device.id} />
         {tab === "summary"  && <SummaryTab device={device} alerts={alerts} linkedTickets={linkedTickets} ticketHubPublicUrl={ticketHubPublicUrl} posture={posture} notes={deviceNotes} canEditNotes={!!ctx} />}
@@ -325,10 +327,12 @@ function ActionBar({
   deviceId,
   maintenance,
   remote,
+  power,
 }: {
   deviceId: string
   maintenance: { on: boolean; until: string | null; reason: string | null }
   remote: { rustdeskId: string | null; enabled: boolean; requiresJustification: boolean; canOpen: boolean }
+  power: { online: boolean; hasAgent: boolean }
 }) {
   // Per UI-PATTERNS.md #1: "Big visible action bar at the top."
   // Phase 8 §6.5: only surface buttons whose backends ship today.
@@ -364,6 +368,7 @@ function ActionBar({
         requiresJustification={remote.requiresJustification}
         canOpen={remote.canOpen}
       />
+      <PowerButton deviceId={deviceId} online={power.online} hasAgent={power.hasAgent} />
     </div>
   )
 }
