@@ -204,6 +204,7 @@ model Fl_Device {
   @@index([clientName, isOnline])
   @@index([os])
   @@index([maintenanceMode])
+  shares            Fl_DeviceShare[]
   @@map("fl_devices")
   @@schema("fleethub")
 }
@@ -243,6 +244,11 @@ model Fl_Tenant {
   // default; an admin flips it per-client to expose the fleet
   // page on portal.pcc2k.com/fleet/*.
   portalEnabled                Boolean @default(false)
+  /// Customer self-service remote access (2026-09-13): when on, portal users
+  /// holding an Fl_DeviceShare for a device get a "Remote access" button on
+  /// portal.pcc2k.com/fleet/devices that opens ControlR's viewer for THAT
+  /// device only, via an external logon token. Off = shares are inert.
+  portalRemoteEnabled          Boolean @default(false)
 
   // Deploy-on-the-fly (2026-09-13). A long-lived per-client enrollment key
   // that never expires and has no use cap. It is the whole auth for the
@@ -468,6 +474,8 @@ model Fl_RemoteSession {
   notes           String?
   /// TicketHub ticket id the notes were last posted to.
   notesTicketId   String?
+  /// "staff" (FleetHub operator) or "portal" (customer self-service).
+  origin          String    @default("staff")
   createdAt       DateTime  @default(now())
 
   @@index([deviceId, createdAt])
@@ -1757,5 +1765,31 @@ model Fl_UserDevicePreference {
   updatedAt     DateTime @updatedAt
 
   @@map("fl_user_device_preferences")
+  @@schema("fleethub")
+}
+
+/// Customer self-service remote access grant (2026-09-13): lets ONE portal
+/// user (by email — portal identity is email-keyed) remote into ONE device
+/// from portal.pcc2k.com. Granted/revoked by staff on the device page;
+/// gated tenant-wide by Fl_Tenant.portalRemoteEnabled. Revoked rows stay
+/// for the audit trail.
+model Fl_DeviceShare {
+  id             String    @id @default(cuid())
+  deviceId       String
+  device         Fl_Device @relation(fields: [deviceId], references: [id])
+  /// Lowercased portal user email.
+  portalEmail    String
+  grantedByEmail String
+  note           String?
+  expiresAt      DateTime?
+  revokedAt      DateTime?
+  revokedByEmail String?
+  lastUsedAt     DateTime?
+  useCount       Int       @default(0)
+  createdAt      DateTime  @default(now())
+
+  @@index([deviceId, revokedAt])
+  @@index([portalEmail, revokedAt])
+  @@map("fl_device_shares")
   @@schema("fleethub")
 }

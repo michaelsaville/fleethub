@@ -12,6 +12,7 @@ import { getSessionContext } from "@/lib/authz"
 import RemoteSessionLauncher from "./RemoteSessionLauncher"
 import { controlrConfigured, resolveControlRDeviceId } from "@/lib/controlr"
 import RustdeskIdEditor from "./RustdeskIdEditor"
+import DeviceSharesCard from "./DeviceSharesCard"
 import AssetLifecycleForm from "./AssetLifecycleForm"
 import FriendlyNameEditor from "@/components/FriendlyNameEditor"
 import {
@@ -1556,6 +1557,8 @@ function RemoteTab({
           </div>
         </details>
       </section>
+
+      <DeviceSharesCard deviceId={device.id} clientName={device.clientName} isAdmin={isAdmin} />
 
       <h2 style={{ fontSize: 13, fontWeight: 600, margin: 0, letterSpacing: "-0.01em" }}>
         Session history ({sessions.length}{sessions.length === 30 ? "+" : ""})

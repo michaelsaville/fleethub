@@ -46,6 +46,7 @@ export const PATCH = withAudit(
       // Phase 7 WS-D portal
       portalEnabled?: boolean
       portalReportMaxAgeDays?: number
+      portalRemoteEnabled?: boolean
       // Phase 9 + 10 toggles
       mfaRequired?: boolean
       psaSyncEnabled?: boolean
@@ -116,6 +117,7 @@ export const PATCH = withAudit(
     if (typeof body.remoteControlEnabled === "boolean") data.remoteControlEnabled = body.remoteControlEnabled
     if (typeof body.remoteRequiresJustification === "boolean") data.remoteRequiresJustification = body.remoteRequiresJustification
     if (typeof body.portalEnabled === "boolean") data.portalEnabled = body.portalEnabled
+    if (typeof body.portalRemoteEnabled === "boolean") data.portalRemoteEnabled = body.portalRemoteEnabled
     if (typeof body.portalReportMaxAgeDays === "number") data.portalReportMaxAgeDays = body.portalReportMaxAgeDays
     if (typeof body.mfaRequired === "boolean") data.mfaRequired = body.mfaRequired
     if (typeof body.psaSyncEnabled === "boolean") data.psaSyncEnabled = body.psaSyncEnabled

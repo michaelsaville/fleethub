@@ -24,6 +24,7 @@ interface State {
   remoteControlEnabled: boolean
   remoteRequiresJustification: boolean
   portalEnabled: boolean
+  portalRemoteEnabled: boolean
   portalReportMaxAgeDays: number
   mfaRequired: boolean
   psaSyncEnabled: boolean
@@ -181,6 +182,12 @@ export default function TenantSettingsTab({
               hint="When on, this tenant's customer portal users see a Fleet page at portal.pcc2k.com/fleet. Read-only by design."
               checked={state.portalEnabled}
               onChange={(v) => patch({ portalEnabled: v })}
+            />
+            <Toggle
+              label="Customer remote access"
+              hint="When on, portal users you've shared a device with (device page → Remote → Share with client) get a Remote access button that opens ControlR's viewer for that device only. Off = existing shares are inert."
+              checked={state.portalRemoteEnabled}
+              onChange={(v) => patch({ portalRemoteEnabled: v })}
             />
             <NumberInput
               label="Report visibility window (days)"

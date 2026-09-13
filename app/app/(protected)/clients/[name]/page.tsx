@@ -58,6 +58,7 @@ export default async function ClientDetailPage({
         remoteControlEnabled: true,
         remoteRequiresJustification: true,
         portalEnabled: true,
+        portalRemoteEnabled: true,
         portalReportMaxAgeDays: true,
         // Phase 10 WS-A §3.4 — Phase 9 + 10 toggles for the tenant
         // settings tab.
@@ -114,6 +115,7 @@ export default async function ClientDetailPage({
               remoteControlEnabled: tenantRow?.remoteControlEnabled ?? true,
               remoteRequiresJustification: tenantRow?.remoteRequiresJustification ?? false,
               portalEnabled: tenantRow?.portalEnabled ?? false,
+              portalRemoteEnabled: tenantRow?.portalRemoteEnabled ?? false,
               portalReportMaxAgeDays: tenantRow?.portalReportMaxAgeDays ?? 90,
               // Phase 10 WS-A §3.4 — Phase 9 + 10 toggles surfaced.
               mfaRequired: tenantRow?.mfaRequired ?? false,
