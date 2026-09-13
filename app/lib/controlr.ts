@@ -127,6 +127,16 @@ export async function resolveControlRDeviceId(device: {
   }
 }
 
+/** ControlR turns the correlation id into an Identity username
+ *  (`ext-<id>`) and a synthetic email (`ext-<id>@controlr.local`), so it
+ *  must be identity-safe: letters, digits, dot, dash only. A colon or a
+ *  second "@" makes user creation fail with an opaque HTTP 500 ("Failed to
+ *  create external user") — seen live 2026-09-13. Stable per operator. */
+export function controlrCorrelationId(operatorEmail: string): string {
+  const slug = operatorEmail.trim().toLowerCase().replace(/@/g, ".at.").replace(/[^a-z0-9.-]+/g, "-")
+  return `fleethub-${slug}`.slice(0, 120)
+}
+
 export interface LogonTokenResult {
   deviceAccessUrl: string
   expiresAt: string
@@ -151,7 +161,7 @@ export async function createControlRLogonToken(args: {
       body: JSON.stringify({
         deviceId: args.controlrDeviceId,
         tenantId: c.tenantId,
-        userCorrelationId: `fleethub:${args.operatorEmail}`,
+        userCorrelationId: controlrCorrelationId(args.operatorEmail),
         userDisplayName: args.operatorName ?? args.operatorEmail,
         sessionCorrelationId: args.sessionId,
         expirationMinutes: args.expirationMinutes,
