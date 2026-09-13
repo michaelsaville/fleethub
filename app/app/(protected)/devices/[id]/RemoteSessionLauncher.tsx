@@ -26,50 +26,6 @@ interface Props {
   canOpen: boolean
 }
 
-// ControlR's web viewer — a normal https page with a single-use logon
-// token in the URL. New tab so FleetHub stays put.
-//
-// ControlR 0.27.6 quirk (fixed upstream in 0.28, not yet published as an
-// image): the token request signs the browser in (cookie) but the
-// prerendered page doesn't persist that auth state to the WASM client, so
-// the FIRST render shows "You are not authorized" even though the session
-// cookie is now valid. Loading the same page WITHOUT the token then renders
-// signed in. So: open the token URL, wait for that navigation to commit
-// (reading a cross-origin window's location throws — that's the signal),
-// then replace it with the clean URL. On 0.28+ the second hop is a no-op
-// (ControlR itself strips the token) — remove this once we're there.
-function openControlR(deepLink: string) {
-  const clean = deepLink.replace(/([?&])logonToken=[^&]*&?/, "$1").replace(/[?&]$/, "")
-  const w = window.open(deepLink, "_blank", deepLink.includes("logonToken=") ? undefined : "noopener")
-  if (!w) {
-    window.location.href = deepLink
-    return
-  }
-  if (!deepLink.includes("logonToken=")) return // plain deep link (CONTROLR_LOGON_TOKENS=off)
-  const started = Date.now()
-  const iv = window.setInterval(() => {
-    let committed = false
-    try {
-      // Same-origin while still about:blank; throws once ControlR's
-      // document is committed.
-      void w.location.href
-    } catch {
-      committed = true
-    }
-    if (committed || Date.now() - started > 8000 || w.closed) {
-      window.clearInterval(iv)
-      if (w.closed) return
-      window.setTimeout(() => {
-        try {
-          w.location.replace(clean)
-        } catch {
-          /* cross-origin navigation of an opened window is allowed; ignore */
-        }
-      }, 900)
-    }
-  }, 150)
-}
-
 export default function RemoteSessionLauncher({
   deviceId,
   rustdeskId,
@@ -127,7 +83,10 @@ export default function RemoteSessionLauncher({
       setSubmitting(false)
       router.refresh()
       if (j.mode === "controlr") {
-        openControlR(j.deepLink)
+        // FleetHub's own session workspace (viewer + context rail) — same
+        // origin, so a plain new tab.
+        const w = window.open(j.deepLink, "_blank", "noopener")
+        if (!w) window.location.href = j.deepLink
         return
       }
       // window.open with target=_self triggers the rustdesk:// handler

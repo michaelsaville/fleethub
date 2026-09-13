@@ -1,12 +1,12 @@
 "use server"
 
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { revalidatePath } from "next/cache"
 import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { requireSession } from "@/lib/authz"
 import { mintAccessToken, RustDeskFreeMode, rustDeskDeepLink } from "@/lib/rustdesk"
-import { controlrConfigured, controlrDeviceUrl, controlrLogonTokensEnabled, createControlRLogonToken, resolveControlRDeviceId } from "@/lib/controlr"
+import { controlrConfigured, controlrLogonTokensEnabled, resolveControlRDeviceId } from "@/lib/controlr"
 
 // Phase 7 Workstream C step 2 — server actions that own the
 // open + close lifecycle of an Fl_RemoteSession. Hybrid: same
@@ -87,37 +87,10 @@ export async function openRemoteSession(formData: FormData): Promise<OpenRemoteS
       },
       select: { id: true },
     })
-    let minted: { deviceAccessUrl: string; expiresAt: string | null }
-    try {
-      minted = controlrLogonTokensEnabled()
-        ? await createControlRLogonToken({
-            controlrDeviceId: controlr.controlrDeviceId,
-            operatorEmail: ctx.email,
-            operatorName: null,
-            sessionId: session.id,
-            expirationMinutes: TOKEN_TTL_MIN,
-          })
-        : // 0.27.6 workaround — see controlrLogonTokensEnabled(). Plain deep
-          // link; the operator's own ControlR login carries the session.
-          { deviceAccessUrl: controlrDeviceUrl(controlr.controlrDeviceId)!, expiresAt: null }
-    } catch (err) {
-      await prisma.fl_RemoteSession.update({ where: { id: session.id }, data: { state: "revoked", endedAt: new Date() } })
-      await writeAudit({
-        actorEmail: ctx.email,
-        clientName: device.clientName,
-        deviceId: device.id,
-        action: "remote.session.open.fail",
-        outcome: "error",
-        detail: { provider: "controlr", error: err instanceof Error ? err.message : String(err) },
-      })
-      throw new Error(`ControlR refused the session: ${err instanceof Error ? err.message : String(err)}`)
-    }
-    if (minted.expiresAt) {
-      await prisma.fl_RemoteSession.update({
-        where: { id: session.id },
-        data: { accessTokenExpiresAt: new Date(minted.expiresAt) },
-      })
-    }
+    // The workspace page (/devices/[id]/session) mints the ControlR logon
+    // token itself on every render, so nothing is minted here — the
+    // launcher just opens the workspace in a new tab.
+    const workspaceUrl = `/devices/${device.id}/session?s=${session.id}`
     await writeAudit({
       actorEmail: ctx.email,
       clientName: device.clientName,
@@ -131,14 +104,14 @@ export async function openRemoteSession(formData: FormData): Promise<OpenRemoteS
         hostname: device.hostname,
         hasJustification: !!justification,
         logonToken: controlrLogonTokensEnabled(),
-        ttlMin: minted.expiresAt ? TOKEN_TTL_MIN : null,
+        workspace: true,
       },
     })
     revalidatePath(`/devices/${device.id}`)
     revalidatePath("/remote-sessions")
     return {
       sessionId: session.id,
-      deepLink: minted.deviceAccessUrl,
+      deepLink: workspaceUrl,
       mode: "controlr",
       justificationCaptured: !!justification,
     }
@@ -256,4 +229,71 @@ export async function markRemoteSessionClosed(formData: FormData): Promise<void>
 
 function sha256(s: string): string {
   return createHash("sha256").update(s, "utf8").digest("hex")
+}
+
+export interface SaveSessionNotesResult {
+  ok: boolean
+  error?: string
+  postedToTicket?: number | null
+}
+
+/** Session-workspace notes. Always saved on the Fl_RemoteSession; when a
+ *  TicketHub ticket is chosen, also posted there as an INTERNAL comment
+ *  (cross-schema insert — TicketHub has no API for this and shares our
+ *  Postgres). The comment author is the TicketHub user with the operator's
+ *  email; no such user → saved locally only, with a clear error. */
+export async function saveSessionNotes(input: {
+  sessionId: string
+  notes: string
+  ticketId: string | null
+}): Promise<SaveSessionNotesResult> {
+  const ctx = await requireSession()
+  const notes = input.notes.trim().slice(0, 8000)
+  const session = await prisma.fl_RemoteSession.findUnique({
+    where: { id: input.sessionId },
+    select: { id: true, deviceId: true, operatorEmail: true, notesTicketId: true },
+  })
+  if (!session) return { ok: false, error: "Session not found" }
+  if (session.operatorEmail !== ctx.email && ctx.role !== "ADMIN") return { ok: false, error: "Not your session" }
+
+  await prisma.fl_RemoteSession.update({ where: { id: session.id }, data: { notes: notes || null } })
+  if (!input.ticketId || !notes) return { ok: true, postedToTicket: null }
+
+  const device = await prisma.fl_Device.findUnique({
+    where: { id: session.deviceId },
+    select: { hostname: true, clientName: true },
+  })
+  const ticket = await prisma.$queryRaw<Array<{ id: string; ticketNumber: number; clientName: string }>>`
+    SELECT t.id, t."ticketNumber", c.name AS "clientName"
+      FROM tickethub.th_tickets t JOIN tickethub.th_clients c ON c.id = t."clientId"
+     WHERE t.id = ${input.ticketId} AND t."deletedAt" IS NULL
+     LIMIT 1
+  `
+  if (!ticket[0]) return { ok: false, error: "Ticket not found" }
+  if (device && ticket[0].clientName.toLowerCase() !== device.clientName.toLowerCase()) {
+    return { ok: false, error: "That ticket belongs to a different client" }
+  }
+  const author = await prisma.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM tickethub.th_users WHERE lower(email) = lower(${ctx.email}) AND "isActive" LIMIT 1
+  `
+  if (!author[0]) {
+    return { ok: false, error: `Saved here, but not posted: no TicketHub user with email ${ctx.email}` }
+  }
+  const body = `🖥 Remote session notes — ${device?.hostname ?? "device"} (FleetHub session ${session.id}):\n\n${notes}`
+  const commentId = `flrs_${randomUUID().replace(/-/g, "")}`
+  await prisma.$executeRaw`
+    INSERT INTO tickethub.th_ticket_comments (id, "ticketId", "authorId", body, "isInternal", "createdAt", "updatedAt")
+    VALUES (${commentId}, ${ticket[0].id}, ${author[0].id}, ${body}, true, NOW(), NOW())
+  `
+  await prisma.$executeRaw`UPDATE tickethub.th_tickets SET "updatedAt" = NOW() WHERE id = ${ticket[0].id}`
+  await prisma.fl_RemoteSession.update({ where: { id: session.id }, data: { notesTicketId: ticket[0].id } })
+  await writeAudit({
+    actorEmail: ctx.email,
+    clientName: device?.clientName ?? null,
+    deviceId: session.deviceId,
+    action: "remote.session.notes_posted",
+    outcome: "ok",
+    detail: { sessionId: session.id, ticketId: ticket[0].id, ticketNumber: ticket[0].ticketNumber, chars: notes.length },
+  })
+  return { ok: true, postedToTicket: ticket[0].ticketNumber }
 }

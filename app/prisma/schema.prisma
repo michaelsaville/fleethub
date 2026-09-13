@@ -463,6 +463,11 @@ model Fl_RemoteSession {
   /// recorded by the operator clicking "Mark as closed" rather
   /// than by the Pro API reporting an actual disconnect.
   assertedClose   Boolean   @default(false)
+  /// Session workspace notes (what the tech did). Also pushed to a
+  /// TicketHub ticket as an internal comment when the tech picks one.
+  notes           String?
+  /// TicketHub ticket id the notes were last posted to.
+  notesTicketId   String?
   createdAt       DateTime  @default(now())
 
   @@index([deviceId, createdAt])
