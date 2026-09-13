@@ -35,11 +35,19 @@ async function currentVersion(): Promise<string> {
   }
 }
 
+// The URL the TARGET machine must reach. Behind nginx the request's own
+// host is the container's (0.0.0.0:3000) — served a script pointing there
+// once, 2026-09-13, and the install died on the download. So: env, else
+// the proxy's forwarded host, else the public hostname; never req.url.
 function baseUrl(req: Request): string {
   const env = process.env.FLEETHUB_PUBLIC_URL?.trim()
   if (env) return env.replace(/\/$/, "")
-  const u = new URL(req.url)
-  return `${u.protocol}//${u.host}`
+  const fwdHost = req.headers.get("x-forwarded-host")?.split(",")[0].trim()
+  if (fwdHost && !/^(0\.0\.0\.0|127\.|localhost)/.test(fwdHost)) {
+    const proto = req.headers.get("x-forwarded-proto")?.split(",")[0].trim() || "https"
+    return `${proto}://${fwdHost}`
+  }
+  return "https://fleethub.pcc2k.com"
 }
 
 export async function GET(
