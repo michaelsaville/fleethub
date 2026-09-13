@@ -12,12 +12,8 @@ export default function NewClientPage() {
             New client
           </h1>
           <p style={{ color: "var(--color-text-secondary)", fontSize: "13px", margin: 0 }}>
-            Pre-create a client so it appears in <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "12px" }}>/clients</code>{" "}
-            before any agent has enrolled. The name must match the
-            <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "12px" }}> clientName</code>{" "}
-            the first agent will register under — and the
-            <code style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "12px" }}> TH_Client.name</code>{" "}
-            in TicketHub.
+            Pick the client from TicketHub. FleetHub shares its database, so the name is
+            taken from there verbatim — no retyping, no near-miss spellings.
           </p>
         </header>
         <NewClientForm />

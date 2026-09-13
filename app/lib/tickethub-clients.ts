@@ -19,3 +19,31 @@ export async function findTickethubClientByName(
   `
   return rows[0] ?? null
 }
+
+export interface TickethubClientCandidate {
+  name: string
+  shortCode: string | null
+  city: string | null
+  clientType: string
+  contacts: number
+  /** Already has an Fl_Tenant row (so the picker can grey it out). */
+  isTenant: boolean
+}
+
+/** Active TicketHub clients for the "new client" picker. Shared DB —
+ *  there is no reason to make an operator retype a name that already
+ *  exists 1 schema over. */
+export async function listTickethubClientCandidates(): Promise<TickethubClientCandidate[]> {
+  return prisma.$queryRaw<TickethubClientCandidate[]>`
+    SELECT c.name,
+           c."shortCode",
+           c."billingCity" AS city,
+           c."clientType"::text AS "clientType",
+           (SELECT count(*)::int FROM tickethub.th_contacts k
+             WHERE k."clientId" = c.id AND k."isActive") AS contacts,
+           EXISTS (SELECT 1 FROM fleethub.fl_tenants t WHERE t.name = c.name) AS "isTenant"
+      FROM tickethub.th_clients c
+     WHERE c."isActive"
+     ORDER BY c.name
+  `
+}
