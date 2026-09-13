@@ -35,6 +35,36 @@ export function generateAgentSecret(): string {
   return randomBytes(32).toString("hex")
 }
 
+/** Per-tenant long-lived enrollment key (see Fl_Tenant.enrollKey).
+ *  40 lowercase hex chars — distinguishable from the 64-char one-time
+ *  tokens by length alone, and legal inside a Windows filename. */
+export const ENROLL_KEY_LENGTH = 40
+export function generateEnrollKey(): string {
+  return randomBytes(ENROLL_KEY_LENGTH / 2).toString("hex")
+}
+export function looksLikeEnrollKey(s: string): boolean {
+  return /^[0-9a-f]{40}$/.test(s)
+}
+export function looksLikeEnrollToken(s: string): boolean {
+  return /^[0-9a-f]{64}$/.test(s)
+}
+
+/** Everything the Install tab shows for a tenant key: the one-liners and
+ *  the download URLs. All routes live under /install/k/<key>/… and are
+ *  public — the key is the credential. */
+export function buildKeyInstallLinks(key: string, fleethubBaseUrl: string) {
+  const url = fleethubBaseUrl.replace(/\/$/, "")
+  const base = `${url}/install/k/${key}`
+  return {
+    windowsOneLiner: `iwr -useb ${base}/pcc2k-agent.ps1 | iex`,
+    unixOneLiner: `curl -fsSL ${base}/pcc2k-agent.sh | sudo bash`,
+    windowsInstallerUrl: `${base}/pcc2k-agent-${key}.exe`,
+    windowsInstallerName: `pcc2k-agent-${key}.exe`,
+    scriptPs1Url: `${base}/pcc2k-agent.ps1`,
+    scriptShUrl: `${base}/pcc2k-agent.sh`,
+  }
+}
+
 export async function hashAgentSecret(secret: string): Promise<string> {
   return bcrypt.hash(secret, 10)
 }
@@ -133,40 +163,15 @@ export async function consumeEnrollToken(args: {
     return { ok: false, reason: "already-consumed", status: 410 }
   }
 
-  const reg = await prisma.fl_AgentRegistration.create({
-    data: {
-      tenantName: row.tenantName,
-      hostname: args.hostname ?? null,
-      os: args.os ?? null,
-      osVersion: args.osVersion ?? null,
-      agentSecretHash,
-      enrolledByToken: args.token,
-    },
+  const reg = await registerAgent({
+    tenantName: row.tenantName,
+    enrolledByToken: args.token,
+    agentSecretHash,
+    agentSecret,
+    hostname: args.hostname,
+    os: args.os,
+    osVersion: args.osVersion,
   })
-
-  // Bridge to opshub.op_agents — what the WSS gateway looks up.
-  // Without this row + proofKeyEnc the agent's session.proof fails
-  // and the gateway falls through to dev-token mode (which is
-  // disabled in prod). The cross-schema Op_Agent table predates
-  // the Phase 13 enroll flow; this bridge is what makes the new
-  // enroll path actually work end-to-end.
-  //
-  // proofKeyEnc = AES-GCM(deriveProofKey(agentSecret), masterKey).
-  // The agent receives the plaintext agentSecret (as its "token"),
-  // derives the same proofKey, and both sides match on the
-  // session-challenge HMAC.
-  const proofKeyEnc = wrapProofKey(deriveProofKey(agentSecret))
-  await prisma.$executeRaw`
-    INSERT INTO opshub.op_agents
-      (id, "clientName", hostname, os, "secretHash", "capabilitiesJson",
-       "isActive", "createdAt", "updatedAt", "proofKeyEnc", salt)
-    VALUES (
-      ${reg.id}, ${row.tenantName}, ${args.hostname ?? ""}, ${args.os ?? ""},
-      ${agentSecretHash}, ${"[]"}::jsonb,
-      true, NOW(), NOW(), ${proofKeyEnc}, ${randomBytes(16).toString("hex")}
-    )
-    ON CONFLICT (id) DO NOTHING
-  `
 
   // Backfill consumedByAgentId on the token row. For multi-use tokens
   // we keep the FIRST agent id that consumed it — the audit log
@@ -190,4 +195,106 @@ export async function consumeEnrollToken(args: {
     gatewayUrl,
     tenantName: row.tenantName,
   }
+}
+
+/** Shared tail of every enrollment: the Fl_AgentRegistration row plus
+ *  the opshub.op_agents bridge the WSS gateway looks up. */
+async function registerAgent(args: {
+  tenantName: string
+  enrolledByToken: string
+  agentSecret: string
+  agentSecretHash: string
+  hostname: string | null
+  os: string | null
+  osVersion: string | null
+}) {
+  const reg = await prisma.fl_AgentRegistration.create({
+    data: {
+      tenantName: args.tenantName,
+      hostname: args.hostname ?? null,
+      os: args.os ?? null,
+      osVersion: args.osVersion ?? null,
+      agentSecretHash: args.agentSecretHash,
+      enrolledByToken: args.enrolledByToken,
+    },
+  })
+
+  // Bridge to opshub.op_agents — what the WSS gateway looks up.
+  // Without this row + proofKeyEnc the agent's session.proof fails
+  // and the gateway falls through to dev-token mode (which is
+  // disabled in prod). The cross-schema Op_Agent table predates
+  // the Phase 13 enroll flow; this bridge is what makes the new
+  // enroll path actually work end-to-end.
+  //
+  // proofKeyEnc = AES-GCM(deriveProofKey(agentSecret), masterKey).
+  // The agent receives the plaintext agentSecret (as its "token"),
+  // derives the same proofKey, and both sides match on the
+  // session-challenge HMAC.
+  const proofKeyEnc = wrapProofKey(deriveProofKey(args.agentSecret))
+  await prisma.$executeRaw`
+    INSERT INTO opshub.op_agents
+      (id, "clientName", hostname, os, "secretHash", "capabilitiesJson",
+       "isActive", "createdAt", "updatedAt", "proofKeyEnc", salt)
+    VALUES (
+      ${reg.id}, ${args.tenantName}, ${args.hostname ?? ""}, ${args.os ?? ""},
+      ${args.agentSecretHash}, ${"[]"}::jsonb,
+      true, NOW(), NOW(), ${proofKeyEnc}, ${randomBytes(16).toString("hex")}
+    )
+    ON CONFLICT (id) DO NOTHING
+  `
+
+  return reg
+}
+
+export type TenantKeyEnrollError = { ok: false; reason: "not-found" | "disabled"; status: 404 }
+
+/** Enroll against a tenant's long-lived key. Nothing is consumed; the
+ *  key is either valid or it isn't. Disabled keys and unknown keys both
+ *  404 so a probe learns nothing. */
+export async function enrollWithTenantKey(args: {
+  key: string
+  hostname: string | null
+  os: string | null
+  osVersion: string | null
+}): Promise<ConsumeEnrollResult | TenantKeyEnrollError> {
+  if (!looksLikeEnrollKey(args.key)) return { ok: false, reason: "not-found", status: 404 }
+  const tenant = await prisma.fl_Tenant.findUnique({
+    where: { enrollKey: args.key },
+    select: { name: true, enrollKeyEnabled: true },
+  })
+  if (!tenant) return { ok: false, reason: "not-found", status: 404 }
+  if (!tenant.enrollKeyEnabled) return { ok: false, reason: "disabled", status: 404 }
+
+  const agentSecret = generateAgentSecret()
+  const agentSecretHash = await hashAgentSecret(agentSecret)
+  const reg = await registerAgent({
+    tenantName: tenant.name,
+    enrolledByToken: `key:${args.key.slice(0, 8)}`,
+    agentSecret,
+    agentSecretHash,
+    hostname: args.hostname,
+    os: args.os,
+    osVersion: args.osVersion,
+  })
+  const baseUrl = process.env.FLEETHUB_PUBLIC_URL?.trim() || "https://fleethub.pcc2k.com"
+  const gatewayUrl =
+    process.env.PCC2K_GATEWAY_PUBLIC_URL?.trim() || "wss://gateway.pcc2k.com/agent/v1"
+  return {
+    ok: true,
+    agentId: reg.id,
+    agentSecret,
+    fleethubBaseUrl: baseUrl,
+    gatewayUrl,
+    tenantName: tenant.name,
+  }
+}
+
+/** Resolve a tenant's key for the public /install/k/<key> routes. */
+export async function tenantForEnrollKey(key: string): Promise<{ name: string } | null> {
+  if (!looksLikeEnrollKey(key)) return null
+  const t = await prisma.fl_Tenant.findUnique({
+    where: { enrollKey: key },
+    select: { name: true, enrollKeyEnabled: true },
+  })
+  return t && t.enrollKeyEnabled ? { name: t.name } : null
 }

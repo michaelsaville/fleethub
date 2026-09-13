@@ -23,6 +23,13 @@ model Fl_StaffUser {
   email     String   @unique
   name      String?
   role      String   @default("TECH") // ADMIN | TECH | VIEWER
+  /// Tenant-scoped RBAC. JSON array of clientNames this staffer may act
+  /// on. NULL or empty array = unrestricted (all tenants) — preserves the
+  /// pre-scoping behavior for existing users. When populated, mutation
+  /// routes enforce it via assertClientAccess() in addition to the role
+  /// check, so a scoped TECH cannot act across tenants even if they reach
+  /// the endpoint directly.
+  clientScopesJson String?
   /// Phase 7 Workstream A step 8 — E.164 mobile for SMS dispatch when
   /// this user is the resolved on-call. Optional; staff without a
   /// phone are skipped during sms-channel resolution.
@@ -233,6 +240,17 @@ model Fl_Tenant {
   // default; an admin flips it per-client to expose the fleet
   // page on portal.pcc2k.com/fleet/*.
   portalEnabled                Boolean @default(false)
+
+  // Deploy-on-the-fly (2026-09-13). A long-lived per-client enrollment key
+  // that never expires and has no use cap. It is the whole auth for the
+  // installer link, the one-liner scripts and the double-click
+  // `pcc2k-agent-<key>.exe` download, so it is rotatable (old links die
+  // instantly) and can be switched off. 40 lowercase hex chars — safe in
+  // URLs and Windows filenames. Single-use Fl_EnrollToken stays for the
+  // paranoid path.
+  enrollKey                    String?   @unique
+  enrollKeyEnabled             Boolean   @default(true)
+  enrollKeyRotatedAt           DateTime?
   /// Max age (days) of report artifacts surfaced to the customer
   /// via /fleet/reports. Default 90 trims chatty history; HIPAA
   /// tenants may want this tighter, non-HIPAA may want unlimited
@@ -889,6 +907,9 @@ model Fl_Deployment {
   rebootDeferredCount Int      @default(0)
   /// Stage we're currently dispatching (or last completed stage if paused).
   currentStage        String?
+  /// When the current stage began. Anchors the ring soak timer that the
+  /// deployment-auto-promote cron uses to advance canary->wave->full.
+  stageEnteredAt      DateTime?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
   targets             Fl_DeploymentTarget[]

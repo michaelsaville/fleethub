@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { writeAudit } from "@/lib/audit"
-import { consumeEnrollToken } from "@/lib/agent-enroll"
+import { consumeEnrollToken, enrollWithTenantKey, looksLikeEnrollKey } from "@/lib/agent-enroll"
 
 // Phase 13 WS-D.0 — agent bootstrap consumer.
 //
@@ -35,17 +35,28 @@ export async function POST(req: NextRequest) {
 
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null
 
-  const result = await consumeEnrollToken({
-    token: body.token,
-    hostname: body.hostname ?? null,
-    os: body.os ?? null,
-    osVersion: body.osVersion ?? null,
-    ip,
-  })
+  // Two credentials share this endpoint: a 64-hex single-use token, or a
+  // 40-hex per-tenant enrollment key (the installer-link path — never
+  // consumed, revoked by rotating the key).
+  const viaKey = looksLikeEnrollKey(body.token)
+  const result = viaKey
+    ? await enrollWithTenantKey({
+        key: body.token,
+        hostname: body.hostname ?? null,
+        os: body.os ?? null,
+        osVersion: body.osVersion ?? null,
+      })
+    : await consumeEnrollToken({
+        token: body.token,
+        hostname: body.hostname ?? null,
+        os: body.os ?? null,
+        osVersion: body.osVersion ?? null,
+        ip,
+      })
 
   if (!result.ok) {
     await writeAudit({
-      action: "enroll-token.consume.fail",
+      action: viaKey ? "enroll-key.use.fail" : "enroll-token.consume.fail",
       outcome: "error",
       detail: { reason: result.reason, ip, hostname: body.hostname ?? null },
     }).catch(() => {})
@@ -57,7 +68,7 @@ export async function POST(req: NextRequest) {
 
   await writeAudit({
     clientName: result.tenantName,
-    action: "enroll-token.consumed",
+    action: viaKey ? "enroll-key.used" : "enroll-token.consumed",
     outcome: "ok",
     detail: {
       agentId: result.agentId,
