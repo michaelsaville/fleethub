@@ -36,14 +36,17 @@ export interface TickethubClientCandidate {
 export async function listTickethubClientCandidates(): Promise<TickethubClientCandidate[]> {
   return prisma.$queryRaw<TickethubClientCandidate[]>`
     SELECT c.name,
-           c."shortCode",
-           c."billingCity" AS city,
-           c."clientType"::text AS "clientType",
-           (SELECT count(*)::int FROM tickethub.th_contacts k
-             WHERE k."clientId" = c.id AND k."isActive") AS contacts,
+           max(c."shortCode") AS "shortCode",
+           max(c."billingCity") AS city,
+           max(c."clientType"::text) AS "clientType",
+           sum((SELECT count(*)::int FROM tickethub.th_contacts k
+                 WHERE k."clientId" = c.id AND k."isActive"))::int AS contacts,
            EXISTS (SELECT 1 FROM fleethub.fl_tenants t WHERE t.name = c.name) AS "isTenant"
       FROM tickethub.th_clients c
      WHERE c."isActive"
+     -- TicketHub has a few duplicate names (Novum Designs, Chillmers, …);
+     -- FleetHub keys on name, so collapse them to one row.
+     GROUP BY c.name
      ORDER BY c.name
   `
 }
