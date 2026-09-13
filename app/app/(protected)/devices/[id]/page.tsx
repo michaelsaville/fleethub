@@ -10,7 +10,9 @@ import { getDevice, getDeviceActivity, getDeviceAlerts, getDeviceScriptRuns, lis
 import type { DeviceAlert, DeviceRow, DeviceScriptRun } from "@/lib/devices"
 import { getSessionContext } from "@/lib/authz"
 import RemoteSessionLauncher from "./RemoteSessionLauncher"
+import { controlrConfigured, resolveControlRDeviceId } from "@/lib/controlr"
 import RustdeskIdEditor from "./RustdeskIdEditor"
+import AssetLifecycleForm from "./AssetLifecycleForm"
 import FriendlyNameEditor from "@/components/FriendlyNameEditor"
 import {
   formatGb,
@@ -151,7 +153,7 @@ export default async function DeviceDetailPage({
       })
       .catch(() => null),
     getSessionContext(),
-    prisma.fl_Device.findUnique({ where: { id }, select: { rustdeskId: true, clientName: true } }),
+    prisma.fl_Device.findUnique({ where: { id }, select: { hostname: true, rustdeskId: true, controlrDeviceId: true, clientName: true, assetTag: true, purchasedAt: true, warrantyExpiresAt: true, purchasePriceCents: true } }),
     prisma.fl_RemoteSession.findMany({
       where: { deviceId: id },
       orderBy: { createdAt: "desc" },
@@ -172,6 +174,13 @@ export default async function DeviceDetailPage({
     : null
   const remoteEnabled = tenantRow?.remoteControlEnabled ?? true
   const requiresJust = tenantRow?.remoteRequiresJustification ?? false
+  // ControlR provider (2026-09-13): resolve + cache the ControlR device by
+  // hostname so the Remote-in button knows whether it can use the web
+  // viewer. Cheap (30 s device-list cache) and never throws.
+  const controlr =
+    deviceMeta && controlrConfigured()
+      ? await resolveControlRDeviceId({ id, hostname: deviceMeta.hostname, controlrDeviceId: deviceMeta.controlrDeviceId })
+      : null
   const fleetSize = fleet.rows.length
   const fleetAppCounts = new Map<string, number>()
   for (const d of fleet.rows) {
@@ -195,6 +204,8 @@ export default async function DeviceDetailPage({
           }}
           remote={{
             rustdeskId: deviceMeta?.rustdeskId ?? null,
+            controlrDeviceId: controlr?.controlrDeviceId ?? null,
+            controlrOnline: controlr?.device ? controlr.device.isOnline : null,
             enabled: remoteEnabled,
             requiresJustification: requiresJust,
             canOpen: !!ctx,
@@ -203,6 +214,18 @@ export default async function DeviceDetailPage({
         />
         <TabNav active={tab} deviceId={device.id} />
         {tab === "summary"  && <SummaryTab device={device} alerts={alerts} linkedTickets={linkedTickets} ticketHubPublicUrl={ticketHubPublicUrl} posture={posture} notes={deviceNotes} canEditNotes={!!ctx} />}
+        {tab === "summary" && deviceMeta && (
+          <section style={{ background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "10px", padding: "14px 16px" }}>
+            <h2 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 10px" }}>Asset &amp; warranty</h2>
+            <AssetLifecycleForm
+              deviceId={device.id}
+              assetTag={deviceMeta.assetTag}
+              purchasedAt={deviceMeta.purchasedAt ? deviceMeta.purchasedAt.toISOString() : null}
+              warrantyExpiresAt={deviceMeta.warrantyExpiresAt ? deviceMeta.warrantyExpiresAt.toISOString() : null}
+              purchasePriceCents={deviceMeta.purchasePriceCents}
+            />
+          </section>
+        )}
         {tab === "system"   && <SystemTab device={device} />}
         {tab === "alerts"   && <AlertsTab alerts={alerts} />}
         {tab === "activity" && <ActivityFeed items={activity} title="Device activity" />}
@@ -331,7 +354,14 @@ function ActionBar({
 }: {
   deviceId: string
   maintenance: { on: boolean; until: string | null; reason: string | null }
-  remote: { rustdeskId: string | null; enabled: boolean; requiresJustification: boolean; canOpen: boolean }
+  remote: {
+    rustdeskId: string | null
+    controlrDeviceId: string | null
+    controlrOnline: boolean | null
+    enabled: boolean
+    requiresJustification: boolean
+    canOpen: boolean
+  }
   power: { online: boolean; hasAgent: boolean }
 }) {
   // Per UI-PATTERNS.md #1: "Big visible action bar at the top."
@@ -364,6 +394,8 @@ function ActionBar({
       <RemoteSessionLauncher
         deviceId={deviceId}
         rustdeskId={remote.rustdeskId}
+        controlrDeviceId={remote.controlrDeviceId}
+        controlrOnline={remote.controlrOnline}
         remoteControlEnabled={remote.enabled}
         requiresJustification={remote.requiresJustification}
         canOpen={remote.canOpen}

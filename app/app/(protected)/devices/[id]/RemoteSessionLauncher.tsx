@@ -18,6 +18,9 @@ import { InlineAlert } from "@/components/ui/InlineAlert"
 interface Props {
   deviceId: string
   rustdeskId: string | null
+  /** 2026-09-13: ControlR is the preferred provider when it knows this host. */
+  controlrDeviceId: string | null
+  controlrOnline: boolean | null
   remoteControlEnabled: boolean
   requiresJustification: boolean
   canOpen: boolean
@@ -26,6 +29,8 @@ interface Props {
 export default function RemoteSessionLauncher({
   deviceId,
   rustdeskId,
+  controlrDeviceId,
+  controlrOnline,
   remoteControlEnabled,
   requiresJustification,
   canOpen,
@@ -39,9 +44,12 @@ export default function RemoteSessionLauncher({
   const reasonHints: string[] = []
   if (!canOpen) reasonHints.push("signed in")
   if (!remoteControlEnabled) reasonHints.push("tenant has remote control disabled")
-  if (!rustdeskId) reasonHints.push("device has no RustDesk peer ID set")
-  const disabled = !canOpen || !remoteControlEnabled || !rustdeskId
+  const hasProvider = !!controlrDeviceId || !!rustdeskId
+  if (!hasProvider) reasonHints.push("device is not enrolled in ControlR and has no RustDesk peer ID")
+  if (controlrDeviceId && controlrOnline === false && !rustdeskId) reasonHints.push("device is offline in ControlR")
+  const disabled = !canOpen || !remoteControlEnabled || !hasProvider || (!!controlrDeviceId && controlrOnline === false && !rustdeskId)
   const disabledHint = disabled ? `Requires: ${reasonHints.join(", ")}` : null
+  const via = controlrDeviceId ? "ControlR" : "RustDesk"
 
   function onClick() {
     if (disabled) return
@@ -69,11 +77,19 @@ export default function RemoteSessionLauncher({
       const j = (await res.json()) as {
         sessionId: string
         deepLink: string
-        mode: "pro" | "free"
+        mode: "pro" | "free" | "controlr"
       }
       setModalOpen(false)
       setSubmitting(false)
       router.refresh()
+      if (j.mode === "controlr") {
+        // ControlR's web viewer — a normal https page, single-use logon
+        // token in the URL. New tab so FleetHub stays put; if the popup
+        // is blocked, fall back to navigating this tab.
+        const w = window.open(j.deepLink, "_blank", "noopener")
+        if (!w) window.location.href = j.deepLink
+        return
+      }
       // window.open with target=_self triggers the rustdesk:// handler
       // without leaving the operator on a blank tab. If they don't
       // have the RustDesk client installed, the browser shows its
@@ -91,7 +107,7 @@ export default function RemoteSessionLauncher({
         type="button"
         onClick={onClick}
         disabled={disabled}
-        title={disabledHint ?? "Open a remote-control session"}
+        title={disabledHint ?? `Open a remote-control session via ${via}`}
         style={{
           padding: "6px 12px",
           fontSize: 13,

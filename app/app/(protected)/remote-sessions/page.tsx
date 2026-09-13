@@ -48,7 +48,7 @@ export default async function RemoteSessionsPage({
     select: {
       id: true, deviceId: true, state: true, operatorEmail: true,
       justification: true, startedAt: true, endedAt: true,
-      bytesTransferred: true, assertedClose: true, rustdeskSessionId: true,
+      bytesTransferred: true, assertedClose: true, rustdeskSessionId: true, provider: true,
     },
   })
   const deviceIds = [...new Set(sessions.map((s) => s.deviceId))]
@@ -106,6 +106,7 @@ export default async function RemoteSessionsPage({
                   <Th align="left">Started</Th>
                   <Th align="left">Device</Th>
                   <Th align="left">Operator</Th>
+                  <Th align="left">Via</Th>
                   <Th align="center">State</Th>
                   <Th align="left">Justification</Th>
                   <Th align="right">Bytes</Th>
@@ -134,6 +135,7 @@ export default async function RemoteSessionsPage({
                         ) : <span style={{ color: "var(--color-text-muted)" }}>(deleted)</span>}
                       </Td>
                       <Td align="left">{s.operatorEmail}</Td>
+                      <Td align="left">{s.provider === "controlr" ? "ControlR" : "RustDesk"}</Td>
                       <Td align="center">{stateChip(s.state)}</Td>
                       <Td align="left">
                         {s.justification ?? <span style={{ color: "var(--color-text-muted)" }}>—</span>}

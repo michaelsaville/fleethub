@@ -158,6 +158,9 @@ model Fl_Device {
   /// FleetHub-side cache so the device page doesn't round-trip on
   /// every load. Null until populated.
   rustdeskId    String?
+  /// ControlR device id (Guid) — matched by hostname against the ControlR
+  /// server on first use and cached here. Null = not (yet) in ControlR.
+  controlrDeviceId String? @unique
   /// Phase 8 Workstream B — backup / AV / encryption / warranty
   /// posture. All nullable; only populated when the agent reports
   /// them. Point-in-time snapshot on each heartbeat — no separate
@@ -435,6 +438,9 @@ model Fl_RemoteSession {
   id              String    @id @default(cuid())
   deviceId        String
   operatorEmail   String
+  /// "rustdesk" (original Phase 7 flow) or "controlr" (2026-09-13: external
+  /// logon token → ControlR web viewer).
+  provider        String    @default("rustdesk")
   /// Pro-mode: session id returned by the RustDesk management
   /// API at open. Free-mode: null (no API to ask).
   rustdeskSessionId   String?
