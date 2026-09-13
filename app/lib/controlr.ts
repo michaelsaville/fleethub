@@ -37,6 +37,22 @@ export function controlrConfigured(): boolean {
   return cfg() !== null
 }
 
+/** ControlR 0.27.6 (the current published image) builds the logon-token
+ *  principal without an Email claim, and its Blazor prerender refuses to
+ *  persist auth state without one — so a token URL always renders "You are
+ *  not authorized" (fixed on main / 0.28, unreleased as an image on
+ *  2026-09-13). Until then we deep-link to the device page and rely on the
+ *  operator's own ControlR login. Flip CONTROLR_LOGON_TOKENS=on after the
+ *  0.28 upgrade. */
+export function controlrLogonTokensEnabled(): boolean {
+  return (process.env.CONTROLR_LOGON_TOKENS ?? "off").toLowerCase() === "on"
+}
+
+export function controlrDeviceUrl(controlrDeviceId: string): string | null {
+  const c = cfg()
+  return c ? `${c.url}/device-access?deviceId=${controlrDeviceId}` : null
+}
+
 export function controlrBaseUrl(): string | null {
   return cfg()?.url ?? null
 }
@@ -137,6 +153,13 @@ export function controlrCorrelationId(operatorEmail: string): string {
   return `fleethub-${slug}`.slice(0, 120)
 }
 
+/** ControlR display names allow letters, digits, underscore, hyphen, space
+ *  only (it warns and drops anything else). "msaville - FleetHub". */
+export function controlrDisplayName(operatorEmail: string, operatorName: string | null): string {
+  const base = (operatorName?.trim() || operatorEmail.split("@")[0]).replace(/[^A-Za-z0-9_\- ]+/g, " ").replace(/\s+/g, " ").trim()
+  return `${base || "operator"} - FleetHub`.slice(0, 60)
+}
+
 export interface LogonTokenResult {
   deviceAccessUrl: string
   expiresAt: string
@@ -162,7 +185,7 @@ export async function createControlRLogonToken(args: {
         deviceId: args.controlrDeviceId,
         tenantId: c.tenantId,
         userCorrelationId: controlrCorrelationId(args.operatorEmail),
-        userDisplayName: args.operatorName ?? args.operatorEmail,
+        userDisplayName: controlrDisplayName(args.operatorEmail, args.operatorName),
         sessionCorrelationId: args.sessionId,
         expirationMinutes: args.expirationMinutes,
       }),

@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma"
 import { writeAudit } from "@/lib/audit"
 import { requireSession } from "@/lib/authz"
 import { mintAccessToken, RustDeskFreeMode, rustDeskDeepLink } from "@/lib/rustdesk"
-import { controlrConfigured, createControlRLogonToken, resolveControlRDeviceId } from "@/lib/controlr"
+import { controlrConfigured, controlrDeviceUrl, controlrLogonTokensEnabled, createControlRLogonToken, resolveControlRDeviceId } from "@/lib/controlr"
 
 // Phase 7 Workstream C step 2 — server actions that own the
 // open + close lifecycle of an Fl_RemoteSession. Hybrid: same
@@ -87,15 +87,19 @@ export async function openRemoteSession(formData: FormData): Promise<OpenRemoteS
       },
       select: { id: true },
     })
-    let minted
+    let minted: { deviceAccessUrl: string; expiresAt: string | null }
     try {
-      minted = await createControlRLogonToken({
-        controlrDeviceId: controlr.controlrDeviceId,
-        operatorEmail: ctx.email,
-        operatorName: null,
-        sessionId: session.id,
-        expirationMinutes: TOKEN_TTL_MIN,
-      })
+      minted = controlrLogonTokensEnabled()
+        ? await createControlRLogonToken({
+            controlrDeviceId: controlr.controlrDeviceId,
+            operatorEmail: ctx.email,
+            operatorName: null,
+            sessionId: session.id,
+            expirationMinutes: TOKEN_TTL_MIN,
+          })
+        : // 0.27.6 workaround — see controlrLogonTokensEnabled(). Plain deep
+          // link; the operator's own ControlR login carries the session.
+          { deviceAccessUrl: controlrDeviceUrl(controlr.controlrDeviceId)!, expiresAt: null }
     } catch (err) {
       await prisma.fl_RemoteSession.update({ where: { id: session.id }, data: { state: "revoked", endedAt: new Date() } })
       await writeAudit({
@@ -108,10 +112,12 @@ export async function openRemoteSession(formData: FormData): Promise<OpenRemoteS
       })
       throw new Error(`ControlR refused the session: ${err instanceof Error ? err.message : String(err)}`)
     }
-    await prisma.fl_RemoteSession.update({
-      where: { id: session.id },
-      data: { accessTokenExpiresAt: new Date(minted.expiresAt) },
-    })
+    if (minted.expiresAt) {
+      await prisma.fl_RemoteSession.update({
+        where: { id: session.id },
+        data: { accessTokenExpiresAt: new Date(minted.expiresAt) },
+      })
+    }
     await writeAudit({
       actorEmail: ctx.email,
       clientName: device.clientName,
@@ -124,7 +130,8 @@ export async function openRemoteSession(formData: FormData): Promise<OpenRemoteS
         controlrDeviceId: controlr.controlrDeviceId,
         hostname: device.hostname,
         hasJustification: !!justification,
-        ttlMin: TOKEN_TTL_MIN,
+        logonToken: controlrLogonTokensEnabled(),
+        ttlMin: minted.expiresAt ? TOKEN_TTL_MIN : null,
       },
     })
     revalidatePath(`/devices/${device.id}`)
